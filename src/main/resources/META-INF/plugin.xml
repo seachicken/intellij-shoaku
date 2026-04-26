@@ -28,6 +28,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow id="MyToolWindow" factoryClass="shoaku.MyToolWindowFactory"
                     icon="AllIcons.Toolwindows.ToolWindowPalette"/>
+        <platform.lsp.serverSupportProvider implementation="shoaku.LanguageServerProvider"/>
     </extensions>
 
 </idea-plugin>
