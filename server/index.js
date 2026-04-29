@@ -37,9 +37,25 @@ appServer.stdout.on('data', (chunk) => {
           }
         ]
       }));
+    } else if (message.id === 2) {
+      process.stdout.write(buildNotification("workspace/applyEdit", {
+        edit: {
+          changes: {
+            "": [
+              {
+                range: {
+                  start: { line: 0, character: 0 },
+                  end: { line: 0, character: 0 }
+                },
+                newText: "- Hello world"
+              }
+            ]
+          }
+        }
+      }));
     }
 
-    logError(`Received message from app server: ${JSON.stringify(message)}`)
+    logWarn(`Received message from app server: ${JSON.stringify(message)}`)
   }
 });
 
@@ -53,7 +69,7 @@ appServer.stderr.on('data', (chunk) => {
     appErrBuf = appErrBuf.slice(newlineIdx + 1);
 
     // Remove ANSI escape codes
-    logError(line.replace(/\x1b\[[0-9;]*m/g, ''))
+    logInfo(line.replace(/\x1b\[[0-9;]*m/g, ''))
   }
 });
 
@@ -96,7 +112,6 @@ process.stdin.on('data', (chunk) => {
         capabilities: {}
       };
       process.stdout.write(buildResponse(message.id, result));
-    } else {
     }
   }
 });
@@ -105,9 +120,27 @@ process.stdin.on('end', () => {
   appServer.stdin.end();
 });
 
-function logError(message) {
+function logInfo(message) {
   process.stdout.write(
     buildNotification("window/logMessage", {
+      type: 3,
+      message
+    })
+  );
+}
+
+function logWarn(message) {
+  process.stdout.write(
+    buildNotification("window/logMessage", {
+      type: 2,
+      message
+    })
+  );
+}
+
+function logError(message) {
+  process.stdout.write(
+    buildNotification("window/showMessage", {
       type: 1,
       message
     })
