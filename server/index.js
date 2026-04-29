@@ -25,6 +25,20 @@ appServer.stdout.on('data', (chunk) => {
       continue;
     }
 
+    if (message.id === 0) {
+      appServer.stdin.write(buildAppRequest("thread/start", {}));
+    } else if (message.id === 1) {
+      appServer.stdin.write(buildAppRequest("turn/start", {
+        threadId: message.result.thread.id,
+        input: [
+          {
+            type: "text",
+            text: "Hello world"
+          }
+        ]
+      }));
+    }
+
     logError(`Received message from app server: ${JSON.stringify(message)}`)
   }
 });
