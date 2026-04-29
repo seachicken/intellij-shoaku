@@ -99,19 +99,17 @@ process.stdin.on('data', (chunk) => {
     }
 
     if (message.method === 'initialize') {
-      const params = {
+      appServer.stdin.write(buildAppRequest("initialize", {
         clientInfo: {
           name: "shoaku_intellij",
           title: "Shoaku for IntelliJ",
           version: "0.1.0"
         }
-      };
-      appServer.stdin.write(buildAppRequest("initialize", params));
+      }));
 
-      const result = {
+      process.stdout.write(buildResponse(message.id, {
         capabilities: {}
-      };
-      process.stdout.write(buildResponse(message.id, result));
+      }));
     }
   }
 });
