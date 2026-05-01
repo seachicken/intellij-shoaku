@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from "url";
 
 const appServer = spawn('codex', ['app-server'], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -7,6 +8,8 @@ const appServer = spawn('codex', ['app-server'], {
     RUST_LOG: 'debug'
   }
 });
+
+let clientOptions;
 
 let appBuf = Buffer.alloc(0);
 appServer.stdout.on('data', (chunk) => {
@@ -37,11 +40,11 @@ appServer.stdout.on('data', (chunk) => {
           }
         ]
       }));
-    } else if (message.id === 2) {
+    } else if (message.id === 2 && clientOptions?.filePath) {
       process.stdout.write(buildNotification("workspace/applyEdit", {
         edit: {
           changes: {
-            "": [
+            [pathToFileURL(clientOptions.filePath)]: [
               {
                 range: {
                   start: { line: 0, character: 0 },
@@ -99,6 +102,8 @@ process.stdin.on('data', (chunk) => {
     }
 
     if (message.method === 'initialize') {
+      clientOptions = message.params.initializationOptions;
+
       appServer.stdin.write(buildAppRequest("initialize", {
         clientInfo: {
           name: "shoaku_intellij",

@@ -2,6 +2,7 @@ plugins {
     id("java")
     alias(libs.plugins.kotlin)
     alias(libs.plugins.intellijPlatform)
+    alias(libs.plugins.compose)
 }
 
 group = "shoaku"
@@ -25,9 +26,8 @@ dependencies {
         intellijIdea(providers.gradleProperty("platformVersion"))
         testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
 
-        // Add plugin dependencies for compilation here, for example:
-        // bundledPlugin("com.intellij.java")
-
+        // Add plugin dependencies for compilation here:
+        composeUI()
     }
 }
 
