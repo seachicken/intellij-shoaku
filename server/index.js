@@ -9,7 +9,8 @@ const appServer = spawn('codex', ['app-server'], {
   }
 });
 
-let clientOptions;
+let initializeParams;
+let threadId;
 
 let appBuf = Buffer.alloc(0);
 appServer.stdout.on('data', (chunk) => {
@@ -29,38 +30,91 @@ appServer.stdout.on('data', (chunk) => {
     }
 
     if (message.id === 0) {
-      appServer.stdin.write(buildAppRequest("thread/start", {}));
+      appServer.stdin.write(JSON.stringify(buildAppRequest("thread/start", {
+        cwd: initializeParams.rootPath
+      })) + '\n');
     } else if (message.id === 1) {
-      appServer.stdin.write(buildAppRequest("turn/start", {
-        threadId: message.result.thread.id,
-        input: [
+      threadId = message.result.thread.id;
+
+      (async () => await sendAppRequest("thread/inject_items", {
+        threadId,
+        items: [
           {
-            type: "text",
-            text: "Hello world"
-          }
-        ]
-      }));
-    } else if (message.id === 2 && clientOptions?.filePath) {
-      process.stdout.write(buildNotification("workspace/applyEdit", {
-        edit: {
-          changes: {
-            [pathToFileURL(clientOptions.filePath)]: [
+            type: "message",
+            role: "assistant",
+            content: [
               {
-                range: {
-                  start: { line: 0, character: 0 },
-                  end: { line: 0, character: 0 }
-                },
-                newText: "- Hello world"
+                type: "output_text",
+                text: "You are a developer's assistant. You will help users by breaking down tasks to a level where they can understand and grasp what they want to achieve, and by guiding them through pair programming."
               }
             ]
           }
+        ]
+      }))();
+
+      appServer.stdin.write(JSON.stringify(buildAppRequest("fs/watch", {
+        watchId: initializeParams.initializationOptions.filePath,
+        path: initializeParams.initializationOptions.filePath
+      })) + '\n');
+    } else if (message.id != null && pendingRequests.has(message.id)) {
+      const { resolve, reject } = pendingRequests.get(message.id);
+      pendingRequests.delete(message.id);
+      if (message.error) {
+        reject(message.error);
+      } else {
+        resolve(message.result);
+      }
+    } else if (message.params?.turnId != null && pendingTurns.has(message.params.turnId)) {
+      const { callbacks } = pendingTurns.get(message.params.turnId);
+      if (message.method === 'item/completed') {
+        callbacks?.onItemCompleted(message.params)
+      }
+    } else if (message.params?.turn != null && pendingTurns.has(message.params.turn.id)) {
+      const { resolve, reject } = pendingTurns.get(message.params.turn.id);
+      if (message.method === 'turn/completed') {
+        pendingTurns.delete(message.params.turn.id);
+        if (message.error) {
+          reject(message.error);
+        } else {
+          resolve(message.result);
         }
-      }));
+      }
     }
 
-    logWarn(`Received message from app server: ${JSON.stringify(message)}`)
+    if (initializeParams.initializationOptions?.filePath) {
+      if (message.params?.watchId === initializeParams.initializationOptions.filePath && threadId) {
+        handleFileChange(initializeParams.initializationOptions.filePath, threadId);
+      }
+    }
+
+    logWarn(`Received message from app server: ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
   }
 });
+
+async function handleFileChange(filePath, threadId) {
+  const fileResult = await sendAppRequest("fs/readFile", {
+    path: initializeParams.initializationOptions.filePath
+  });
+  if (!fileResult.dataBase64) {
+    return;
+  }
+
+  await startTurn({
+    threadId,
+    input: [
+      {
+        type: "text",
+        text: `User inputs:\n${Buffer.from(fileResult.dataBase64, 'base64').toString('utf-8')}`
+      }
+    ]}, {
+      onItemCompleted: async (params) => {
+        if (!params?.item?.text) {
+          return;
+        }
+      }
+    }
+  );
+}
 
 let appErrBuf = Buffer.alloc(0);
 appServer.stderr.on('data', (chunk) => {
@@ -102,20 +156,22 @@ process.stdin.on('data', (chunk) => {
     }
 
     if (message.method === 'initialize') {
-      clientOptions = message.params.initializationOptions;
+      initializeParams = message.params;
 
-      appServer.stdin.write(buildAppRequest("initialize", {
+      appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
         clientInfo: {
           name: "shoaku_intellij",
           title: "Shoaku for IntelliJ",
           version: "0.1.0"
         }
-      }));
+      })) + '\n');
 
       process.stdout.write(buildResponse(message.id, {
         capabilities: {}
       }));
     }
+
+    logWarn(`Received message from language client: ${JSON.stringify(message)}`)
   }
 });
 
@@ -150,15 +206,31 @@ function logError(message) {
   );
 }
 
+const pendingTurns = new Map();
+async function startTurn(params, callbacks) {
+  const result = await sendAppRequest('turn/start', params);
+  return new Promise((resolve, reject) => {
+    pendingTurns.set(result.turn.id, { resolve, reject, callbacks });
+  });
+}
+
+const pendingRequests = new Map();
+function sendAppRequest(method, params) {
+  const req = buildAppRequest(method, params);
+  return new Promise((resolve, reject) => {
+    pendingRequests.set(req.id, { resolve, reject });
+    appServer.stdin.write(JSON.stringify(req) + '\n');
+  });
+}
+
 let appParamId = 0;
 function buildAppRequest(method, params) {
-  const body = JSON.stringify({
+  return {
     jsonrpc: '2.0',
     id: appParamId++,
     method,
     params
-  });
-  return `${body}\n`
+  };
 }
 
 function buildNotification(method, params) {
