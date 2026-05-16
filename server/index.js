@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { pathToFileURL } from "url";
+import parser from './parser.js';
 
 const appServer = spawn('codex', ['app-server'], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -11,6 +11,7 @@ const appServer = spawn('codex', ['app-server'], {
 
 let initializeParams;
 let threadId;
+let lists = [];
 
 let appBuf = Buffer.alloc(0);
 appServer.stdout.on('data', (chunk) => {
@@ -36,40 +37,58 @@ appServer.stdout.on('data', (chunk) => {
     } else if (message.id === 1) {
       threadId = message.result.thread.id;
 
-      (async () => await sendAppRequest("thread/inject_items", {
-        threadId,
-        items: [
-          {
-            type: "message",
-            role: "assistant",
-            content: [
-              {
-                type: "output_text",
-                text: "You are a developer's assistant. You will help users by breaking down tasks to a level where they can understand and grasp what they want to achieve, and by guiding them through pair programming."
-              }
-            ]
-          }
-        ]
-      }))();
+      (async () => {
+        await sendAppRequest('thread/inject_items', {
+          threadId,
+          items: [
+            {
+              type: 'message',
+              role: 'developer',
+              content: [
+                {
+                  type: 'input_text',
+                  text: "You are a developer's assistant. You will help users by breaking down tasks to a level where they can understand and grasp what they want to achieve, and by guiding them through pair programming. `checked: true` is treated just as context because the objective has been achieved. Use the `git diff` input as context to understand the state of the pair programming driver. Your response will prioritize the language the user entered."
+                }
+              ]
+            }
+          ]
+        });
+
+        if (initializeParams.initializationOptions?.filePath) {
+          await syncShoakuLists(initializeParams.initializationOptions.filePath, threadId);
+        }
+      })();
 
       appServer.stdin.write(JSON.stringify(buildAppRequest("fs/watch", {
         watchId: initializeParams.initializationOptions.filePath,
         path: initializeParams.initializationOptions.filePath
       })) + '\n');
-    } else if (message.id != null && pendingRequests.has(message.id)) {
+    }
+
+    if (message.id != null && pendingRequests.has(message.id)) {
       const { resolve, reject } = pendingRequests.get(message.id);
       pendingRequests.delete(message.id);
       if (message.error) {
         reject(message.error);
       } else {
-        resolve(message.result);
+        resolve(message);
       }
-    } else if (message.params?.turnId != null && pendingTurns.has(message.params.turnId)) {
-      const { callbacks } = pendingTurns.get(message.params.turnId);
+    }
+
+    if (message.result?.turn?.id != null && pendingTurns.has(message.result.turn.id)) {
+      logWarn(`status changed.`)
+      const { id, callbacks } = pendingTurns.get(message.result.turn.id);
+      callbacks?.onItemStatusChanged(id, message.result.turn.status)
+    }
+
+    if (message.params?.turnId != null && pendingTurns.has(message.params.turnId)) {
+      const { id, callbacks } = pendingTurns.get(message.params.turnId);
       if (message.method === 'item/completed') {
-        callbacks?.onItemCompleted(message.params)
+        callbacks?.onItemCompleted(id, message.params)
       }
-    } else if (message.params?.turn != null && pendingTurns.has(message.params.turn.id)) {
+    }
+
+    if (message.params?.turn != null && pendingTurns.has(message.params.turn.id)) {
       const { resolve, reject } = pendingTurns.get(message.params.turn.id);
       if (message.method === 'turn/completed') {
         pendingTurns.delete(message.params.turn.id);
@@ -83,34 +102,59 @@ appServer.stdout.on('data', (chunk) => {
 
     if (initializeParams.initializationOptions?.filePath) {
       if (message.params?.watchId === initializeParams.initializationOptions.filePath && threadId) {
-        handleFileChange(initializeParams.initializationOptions.filePath, threadId);
+        (async () => {
+          await syncShoakuLists(initializeParams.initializationOptions.filePath, threadId);
+        })();
       }
     }
 
-    logWarn(`Received message from app server: ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
+    if (message.method !== 'item/agentMessage/delta') {
+      logWarn(`Received message from app server: ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
+    }
   }
 });
 
-async function handleFileChange(filePath, threadId) {
-  const fileResult = await sendAppRequest("fs/readFile", {
+async function syncShoakuLists(filePath, threadId) {
+  const fileMsg = await sendAppRequest("fs/readFile", {
     path: initializeParams.initializationOptions.filePath
   });
-  if (!fileResult.dataBase64) {
-    return;
-  }
+  lists = parser.parse(Buffer.from(fileMsg.result.dataBase64, 'base64').toString('utf-8'));
+  process.stdout.write(
+    buildNotification("shoaku/notification", {
+      id: 0,
+      lists
+    })
+  );
 
   await startTurn({
     threadId,
     input: [
       {
         type: "text",
-        text: `User inputs:\n${Buffer.from(fileResult.dataBase64, 'base64').toString('utf-8')}`
+        text: `User inputs:\n${JSON.stringify(lists)}}`
       }
     ]}, {
-      onItemCompleted: async (params) => {
-        if (!params?.item?.text) {
-          return;
+      onItemStatusChanged: async (id, status) => {
+        process.stdout.write(
+          buildNotification("shoaku/notification", {
+            id,
+            lists: [{
+              status
+            }]
+          })
+        );
+      },
+      onItemCompleted: async (id, params) => {
+        const activeItem = findActiveItem(lists);
+        if (activeItem) {
+          activeItem.response = params.item.text;
         }
+        process.stdout.write(
+          buildNotification("shoaku/notification", {
+            id,
+            lists
+          })
+        );
       }
     }
   );
@@ -155,20 +199,73 @@ process.stdin.on('data', (chunk) => {
       continue;
     }
 
-    if (message.method === 'initialize') {
-      initializeParams = message.params;
+    switch (message.method) {
+      case 'initialize':
+        initializeParams = message.params;
 
-      appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
-        clientInfo: {
-          name: "shoaku_intellij",
-          title: "Shoaku for IntelliJ",
-          version: "0.1.0"
+        appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
+          clientInfo: {
+            name: "shoaku_intellij",
+            title: "Shoaku for IntelliJ",
+            version: "0.1.0"
+          }
+        })) + '\n');
+
+        process.stdout.write(buildResponse(message.id, {
+          capabilities: {
+            textDocumentSync: {
+              change: 2,
+              save: true
+            }
+          }
+        }));
+        break;
+
+      case 'textDocument/didChange':
+        const activeItem = findActiveItem(lists);
+        if (threadId != null && activeItem) {
+          appServer.stdin.write(JSON.stringify(buildAppRequest('turn/steer', {
+            threadId,
+            input: [
+              {
+                type: 'text',
+                text: `Users want to achieve "${activeItem.content}". Current edit file location: ${JSON.stringify(message)}`
+              }
+            ],
+            expectedTurnId: pendingTurns.keys().next().value
+          })) + '\n');
         }
-      })) + '\n');
+        break;
 
-      process.stdout.write(buildResponse(message.id, {
-        capabilities: {}
-      }));
+      case 'shoaku/reply':
+        if (threadId != null) {
+          const text = message.params?.text ?? message.text;
+          (async () => {
+            await startTurn({
+              threadId,
+              input: [
+                {
+                  type: 'text',
+                  text
+                }
+              ]}, {
+                onItemCompleted: async (id, params) => {
+                  const activeItem = findActiveItem(lists);
+                  if (activeItem) {
+                    activeItem.response = params.item.text;
+                  }
+                  process.stdout.write(
+                    buildNotification("shoaku/notification", {
+                      id,
+                      lists
+                    })
+                  );
+                }
+              }
+            );
+          })();
+        }
+        break;
     }
 
     logWarn(`Received message from language client: ${JSON.stringify(message)}`)
@@ -178,6 +275,62 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => {
   appServer.stdin.end();
 });
+
+function findActiveItem(lists, root = true) {
+  if (!lists) {
+    return null;
+  }
+
+  for (const item of lists) {
+    if (!root && item.checked === false) {
+      return item;
+    }
+
+    const found = findActiveItem(item.children, false);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+const pendingTurns = new Map();
+async function startTurn(params, callbacks) {
+  if (pendingTurns.size > 0) {
+    return;
+  }
+
+  const msg = await sendAppRequest('turn/start', params);
+
+  await sendAppRequest('thread/shellCommand', {
+    threadId,
+    command: 'git diff --unified=0'
+  });
+
+  return new Promise((resolve, reject) => {
+    pendingTurns.set(msg.result.turn.id, { id: msg.id, resolve, reject, callbacks });
+  });
+}
+
+const pendingRequests = new Map();
+function sendAppRequest(method, params) {
+  const req = buildAppRequest(method, params);
+  return new Promise((resolve, reject) => {
+    pendingRequests.set(req.id, { resolve, reject });
+    appServer.stdin.write(JSON.stringify(req) + '\n');
+  });
+}
+
+let appParamId = 0;
+function buildAppRequest(method, params) {
+  return {
+    jsonrpc: '2.0',
+    id: appParamId++,
+    method,
+    params
+  };
+}
 
 function logInfo(message) {
   process.stdout.write(
@@ -204,33 +357,6 @@ function logError(message) {
       message
     })
   );
-}
-
-const pendingTurns = new Map();
-async function startTurn(params, callbacks) {
-  const result = await sendAppRequest('turn/start', params);
-  return new Promise((resolve, reject) => {
-    pendingTurns.set(result.turn.id, { resolve, reject, callbacks });
-  });
-}
-
-const pendingRequests = new Map();
-function sendAppRequest(method, params) {
-  const req = buildAppRequest(method, params);
-  return new Promise((resolve, reject) => {
-    pendingRequests.set(req.id, { resolve, reject });
-    appServer.stdin.write(JSON.stringify(req) + '\n');
-  });
-}
-
-let appParamId = 0;
-function buildAppRequest(method, params) {
-  return {
-    jsonrpc: '2.0',
-    id: appParamId++,
-    method,
-    params
-  };
 }
 
 function buildNotification(method, params) {
