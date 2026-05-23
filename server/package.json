@@ -1,12 +1,12 @@
 {
-  "name": "server",
+  "name": "@seachicken/shoaku-server",
   "version": "0.1.0",
   "type": "module",
   "main": "index.js",
   "scripts": {
     "test": "node --test"
   },
-  "author": "",
+  "author": "Seito Tanaka",
   "license": "MIT",
-  "description": ""
+  "description": "Agent server for the Shoaku AI coding assistant"
 }
