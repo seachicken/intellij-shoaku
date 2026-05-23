@@ -28,7 +28,8 @@ private open class AppLanguageServerDescriptor(project: Project, name: String) :
 
 private class LanguageServerDescriptor(project: Project) : AppLanguageServerDescriptor(project, "Shoaku") {
     override fun createCommandLine(): GeneralCommandLine {
-        return GeneralCommandLine("node", "")
+        val basePath = project.basePath ?: error("Project base path is not available")
+        return GeneralCommandLine("node", "$basePath/server/index.js")
     }
 
     override fun createInitializationOptions(): Any {

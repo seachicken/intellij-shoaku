@@ -1,6 +1,11 @@
-import { spawn } from 'node:child_process';
+import { mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import child_process, { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import parser from './parser.js';
 
+const exec = promisify(child_process.exec);
 const appServer = spawn('codex', ['app-server'], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: {
@@ -10,7 +15,8 @@ const appServer = spawn('codex', ['app-server'], {
 });
 
 let initializeParams;
-let threadId;
+let navigatorThreadId = '';
+let explorerThreadId = '';
 let lists = [];
 
 let appBuf = Buffer.alloc(0);
@@ -29,34 +35,81 @@ appServer.stdout.on('data', (chunk) => {
       logError(`Received non-JSON message from app server: ${line}`);
       continue;
     }
+    const logPrefix = message.params?.threadId === navigatorThreadId ? '[navigator] ' : message.params?.threadId === explorerThreadId ? '[explorer] ' : '';
+    logWarn(`${logPrefix}Received message from app server: ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
 
     if (message.id === 0) {
-      appServer.stdin.write(JSON.stringify(buildAppRequest("thread/start", {
-        cwd: initializeParams.rootPath
-      })) + '\n');
-    } else if (message.id === 1) {
-      threadId = message.result.thread.id;
-
       (async () => {
-        await sendAppRequest('thread/inject_items', {
-          threadId,
-          items: [
-            {
-              type: 'message',
-              role: 'developer',
-              content: [
-                {
-                  type: 'input_text',
-                  text: "You are a developer's assistant. You will help users by breaking down tasks to a level where they can understand and grasp what they want to achieve, and by guiding them through pair programming. `checked: true` is treated just as context because the objective has been achieved. Use the `git diff` input as context to understand the state of the pair programming driver. Your response will prioritize the language the user entered."
-                }
-              ]
-            }
-          ]
-        });
+        const [navigatorRes, explorerRes] = await Promise.all([
+          sendAppRequest('thread/start', {
+            cwd: initializeParams.rootPath,
+            approvalPolicy: 'never',
+            sandbox: 'read-only'
+          }),
+          (async () => {
+            const workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
+            logWarn(`Created temporary work directory: ${workDir}`)
+            await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir}`);
+            return sendAppRequest('thread/start', {
+              cwd: workDir,
+              approvalPolicy: 'on-request',
+              sandbox: 'workspace-write'
+            })
+          })()
+        ]);
+        navigatorThreadId = navigatorRes.result.thread.id;
+        explorerThreadId = explorerRes.result.thread.id;
 
-        if (initializeParams.initializationOptions?.filePath) {
-          await syncShoakuLists(initializeParams.initializationOptions.filePath, threadId);
-        }
+        await Promise.all([
+          sendAppRequest('thread/inject_items', {
+            threadId: navigatorThreadId,
+            items: [
+              {
+                type: 'message',
+                role: 'developer',
+                content: [
+                  {
+                    type: 'input_text',
+                    text: `
+                    You are an assistant that helps developers understand and progress their work.
+
+                    Responsibilities:
+                    - Understand the user's overall goals and short-term tasks from their TODO list.
+                    - Use LSP events to observe user actions.
+                    - Provide step-by-step guidance and sample code showing what the user should do next.
+                    `
+                  }
+                ]
+              }
+            ]
+          }),
+          sendAppRequest('thread/inject_items', {
+            threadId: explorerThreadId,
+            items: [
+              {
+                type: 'message',
+                role: 'developer',
+                content: [
+                  {
+                    type: 'input_text',
+                    text: `
+                    You can understand what the developer wants to achieve and implement it autonomously.
+
+                    Responsibilities:
+                    - Understand the user's overall goals and short-term tasks from their TODO list.
+                    - Independently generate code to achieve the user's goals.
+                    `
+                  }
+                ]
+              }
+            ]
+          })
+        ]);
+
+        await Promise.all([
+          syncShoakuLists(initializeParams.initializationOptions.filePath, navigatorThreadId),
+          syncShoakuLists(initializeParams.initializationOptions.filePath, explorerThreadId)
+        ]);
       })();
 
       appServer.stdin.write(JSON.stringify(buildAppRequest("fs/watch", {
@@ -101,15 +154,14 @@ appServer.stdout.on('data', (chunk) => {
     }
 
     if (initializeParams.initializationOptions?.filePath) {
-      if (message.params?.watchId === initializeParams.initializationOptions.filePath && threadId) {
+      if (message.params?.watchId === initializeParams.initializationOptions.filePath && navigatorThreadId) {
         (async () => {
-          await syncShoakuLists(initializeParams.initializationOptions.filePath, threadId);
+          await Promise.all([
+            syncShoakuLists(initializeParams.initializationOptions.filePath, navigatorThreadId),
+            syncShoakuLists(initializeParams.initializationOptions.filePath, explorerThreadId)
+          ]);
         })();
       }
-    }
-
-    if (message.method !== 'item/agentMessage/delta') {
-      logWarn(`Received message from app server: ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
     }
   }
 });
@@ -126,12 +178,16 @@ async function syncShoakuLists(filePath, threadId) {
     })
   );
 
+  const parentItem = findActiveParentItem(lists);
+  const childItem = findActiveItem(lists);
+  logWarn(`Parent item: ${parentItem?.content}, child item: ${childItem?.content}`)
+
   await startTurn({
     threadId,
     input: [
       {
         type: "text",
-        text: `User inputs:\n${JSON.stringify(lists)}}`
+        text: `My goal is ${parentItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
       }
     ]}, {
       onItemStatusChanged: async (id, status) => {
@@ -145,6 +201,10 @@ async function syncShoakuLists(filePath, threadId) {
         );
       },
       onItemCompleted: async (id, params) => {
+        if (params.threadId !== navigatorThreadId) {
+          return;
+        }
+
         const activeItem = findActiveItem(lists);
         if (activeItem) {
           activeItem.response = params.item.text;
@@ -198,6 +258,7 @@ process.stdin.on('data', (chunk) => {
       logError(`Received non-JSON message from language client: ${body}`);
       continue;
     }
+    logWarn(`Received message from language client: ${JSON.stringify(message)}`)
 
     switch (message.method) {
       case 'initialize':
@@ -208,6 +269,9 @@ process.stdin.on('data', (chunk) => {
             name: "shoaku_intellij",
             title: "Shoaku for IntelliJ",
             version: "0.1.0"
+          },
+          capabilities: {
+            optOutNotificationMethods: ['item/agentMessage/delta']
           }
         })) + '\n');
 
@@ -222,27 +286,31 @@ process.stdin.on('data', (chunk) => {
         break;
 
       case 'textDocument/didChange':
-        const activeItem = findActiveItem(lists);
-        if (threadId != null && activeItem) {
-          appServer.stdin.write(JSON.stringify(buildAppRequest('turn/steer', {
-            threadId,
-            input: [
+        if (navigatorThreadId) {
+          sendAppRequest('thread/inject_items', {
+            threadId: navigatorThreadId,
+            items: [
               {
-                type: 'text',
-                text: `Users want to achieve "${activeItem.content}". Current edit file location: ${JSON.stringify(message)}`
+                type: 'message',
+                role: 'user',
+                content: [
+                  {
+                    type: 'input_text',
+                    text: JSON.stringify(message)
+                  }
+                ]
               }
             ],
-            expectedTurnId: pendingTurns.keys().next().value
-          })) + '\n');
+          });
         }
         break;
 
       case 'shoaku/reply':
-        if (threadId != null) {
+        if (navigatorThreadId) {
           const text = message.params?.text ?? message.text;
           (async () => {
             await startTurn({
-              threadId,
+              threadId: navigatorThreadId,
               input: [
                 {
                   type: 'text',
@@ -267,14 +335,26 @@ process.stdin.on('data', (chunk) => {
         }
         break;
     }
-
-    logWarn(`Received message from language client: ${JSON.stringify(message)}`)
   }
 });
 
 process.stdin.on('end', () => {
   appServer.stdin.end();
 });
+
+function findActiveParentItem(lists) {
+  if (!lists) {
+    return null;
+  }
+
+  for (const item of lists) {
+    if (item.checked === false) {
+      return item;
+    }
+  }
+
+  return null;
+}
 
 function findActiveItem(lists, root = true) {
   if (!lists) {
@@ -302,11 +382,6 @@ async function startTurn(params, callbacks) {
   }
 
   const msg = await sendAppRequest('turn/start', params);
-
-  await sendAppRequest('thread/shellCommand', {
-    threadId,
-    command: 'git diff --unified=0'
-  });
 
   return new Promise((resolve, reject) => {
     pendingTurns.set(msg.result.turn.id, { id: msg.id, resolve, reject, callbacks });

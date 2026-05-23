@@ -1,6 +1,9 @@
 package shoaku
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -11,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,6 +53,12 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
     val filePathState = rememberTextFieldState(initialText = state.filePath)
     val vm = remember { viewModel }
     val instructionState = rememberTextFieldState()
+    val responseScrollState = rememberScrollState()
+    val activeResponse = remember(vm.items) {
+        val root = vm.items.firstOrNull()
+        val activeChild = root?.children?.firstOrNull { it.checked == false } ?: root?.children?.lastOrNull()
+        activeChild?.response?.takeIf { it.isNotBlank() } ?: ""
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -101,17 +111,68 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text(
-                            text = model.status ?: ""
-                        )
-                        Text(model.content)
-                        Text(model.response ?: "")
+                        SelectionContainer {
+                            Column {
+                                Text(
+                                    text = model.status ?: ""
+                                )
+                                Text(model.content)
+                            }
+                        }
                     }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(4.dp))
+        if (activeResponse.isNotBlank()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        color = Color(0xFF202A2A),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = "AI Response",
+                    fontWeight = FontWeight.Bold
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .verticalScroll(responseScrollState)
+                ) {
+                    SelectionContainer {
+                        Text(activeResponse)
+                    }
+                }
+                if (responseScrollState.maxValue > 0 && responseScrollState.value < responseScrollState.maxValue) {
+                    Spacer(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(12.dp)
+                            .background(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color(0xAA202A2A))
+                                )
+                            )
+                    )
+                    Text(
+                        text = "Scroll for more",
+                        fontSize = 11.sp,
+                        color = Color(0xFF9FB0B0),
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -153,7 +214,7 @@ fun MyToolWindowContentPreview() {
             Item(
                 "", "aaa", children = listOf(
                     Item("", "bbb?", checked = true),
-                    Item("", "ccc?", checked = false, status = "In Progress")
+                    Item("", "ccc?", checked = false, status = "In Progress", response = "hogehoge")
                 )
             )
         )
