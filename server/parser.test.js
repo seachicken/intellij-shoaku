@@ -2,9 +2,9 @@ import assert from 'node:assert';
 import test from 'node:test';
 import parser from './parser.js';
 
-test('parse', (t) => {
+test('parse when root', (t) => {
   assert.deepStrictEqual(parser.parse(`
-- a
+- [shoaku] a
 `), [
       {
         type: 'text',
@@ -15,9 +15,31 @@ test('parse', (t) => {
   );
 });
 
+test('parse when nested', (t) => {
+  assert.deepStrictEqual(parser.parse(`
+- a
+  - [shoaku] b
+`), [
+      {
+        type: 'text',
+        content: 'b',
+        children: []
+      }
+    ]
+  );
+});
+
+test('not parse', (t) => {
+  assert.deepStrictEqual(parser.parse(`
+- a
+`), [
+    ]
+  );
+});
+
 test('parse non-checkd item', (t) => {
   assert.deepStrictEqual(parser.parse(`
-- [ ] a
+- [ ] [shoaku] a
 `), [
       {
         type: 'text',
@@ -31,7 +53,7 @@ test('parse non-checkd item', (t) => {
 
 test('parse checkd item', (t) => {
   assert.deepStrictEqual(parser.parse(`
-- [x] a
+- [x] [shoaku] a
 `), [
       {
         type: 'text',
@@ -45,7 +67,7 @@ test('parse checkd item', (t) => {
 
 test('parse nested nodes', (t) => {
   assert.deepStrictEqual(parser.parse(`
-- a
+- [shoaku] a
   - a_a
 `), [
       {

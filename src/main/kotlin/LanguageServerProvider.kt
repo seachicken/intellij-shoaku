@@ -46,6 +46,7 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
             } else {
                 project.service<ShoakuSettings>().viewModel.apply {
                     items = params.lists
+                    response = params.response
                 }
             }
         }
@@ -53,8 +54,8 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
 }
 
 data class ShoakuNotificationParams(
-    val id: Int,
-    val lists: List<Item>
+    val lists: List<Item>,
+    val response: String
 )
 
 data class Item(
@@ -62,6 +63,5 @@ data class Item(
     val content: String,
     val checked: Boolean? = null,
     var status: String = "",
-    val response: String = "",
     val children: List<Item> = emptyList()
 )

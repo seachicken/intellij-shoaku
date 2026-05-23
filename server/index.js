@@ -173,7 +173,6 @@ async function syncShoakuLists(filePath, threadId) {
   lists = parser.parse(Buffer.from(fileMsg.result.dataBase64, 'base64').toString('utf-8'));
   process.stdout.write(
     buildNotification("shoaku/notification", {
-      id: 0,
       lists
     })
   );
@@ -193,7 +192,6 @@ async function syncShoakuLists(filePath, threadId) {
       onItemStatusChanged: async (id, status) => {
         process.stdout.write(
           buildNotification("shoaku/notification", {
-            id,
             lists: [{
               status
             }]
@@ -205,14 +203,10 @@ async function syncShoakuLists(filePath, threadId) {
           return;
         }
 
-        const activeItem = findActiveItem(lists);
-        if (activeItem) {
-          activeItem.response = params.item.text;
-        }
         process.stdout.write(
           buildNotification("shoaku/notification", {
-            id,
-            lists
+            lists,
+            response: params.item.text
           })
         );
       }
@@ -318,14 +312,10 @@ process.stdin.on('data', (chunk) => {
                 }
               ]}, {
                 onItemCompleted: async (id, params) => {
-                  const activeItem = findActiveItem(lists);
-                  if (activeItem) {
-                    activeItem.response = params.item.text;
-                  }
                   process.stdout.write(
                     buildNotification("shoaku/notification", {
-                      id,
-                      lists
+                      lists,
+                      response: params.item.text
                     })
                   );
                 }

@@ -54,11 +54,6 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
     val vm = remember { viewModel }
     val instructionState = rememberTextFieldState()
     val responseScrollState = rememberScrollState()
-    val activeResponse = remember(vm.items) {
-        val root = vm.items.firstOrNull()
-        val activeChild = root?.children?.firstOrNull { it.checked == false } ?: root?.children?.lastOrNull()
-        activeChild?.response?.takeIf { it.isNotBlank() } ?: ""
-    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -125,7 +120,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
         }
 
         Spacer(modifier = Modifier.height(4.dp))
-        if (activeResponse.isNotBlank()) {
+        if (vm.response.isNotBlank()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -147,7 +142,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
                         .verticalScroll(responseScrollState)
                 ) {
                     SelectionContainer {
-                        Text(activeResponse)
+                        Text(vm.response)
                     }
                 }
                 if (responseScrollState.maxValue > 0 && responseScrollState.value < responseScrollState.maxValue) {
@@ -214,9 +209,10 @@ fun MyToolWindowContentPreview() {
             Item(
                 "", "aaa", children = listOf(
                     Item("", "bbb?", checked = true),
-                    Item("", "ccc?", checked = false, status = "In Progress", response = "hogehoge")
+                    Item("", "ccc?", checked = false, status = "In Progress")
                 )
             )
         )
+        response = "hogehoge"
     }, ShoakuSettings.State())
 }

@@ -3,14 +3,19 @@ function parse(text) {
   const stack = [{ indent: -1, node: root }];
 
   for (const line of text.split('\n')) {
-    const match = line.match(/^( *)(?:- |\* |)(\[[ |x]\]|) *(.+)$/);
+    const match = line.match(/^(\s*)(?:- |\* |)(\[[ |x]\]|) *(\[shoaku\]|) *(.+)$/);
     if (!match) {
       continue;
     }
 
     const indent = match[1].length;
     const checked = match[2];
-    const content = match[3];
+    const label = match[3];
+    const content = match[4];
+
+    if (!label && stack[stack.length - 1].indent < 0) {
+      continue;
+    }
 
     while (stack[stack.length - 1].indent >= indent) {
       stack.pop();
