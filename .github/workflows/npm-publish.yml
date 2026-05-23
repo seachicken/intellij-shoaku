@@ -5,6 +5,8 @@ name: Node.js Package
 
 on:
   workflow_dispatch:
+permissions:
+  id-token: write
 
 jobs:
   build:
@@ -13,8 +15,8 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version-file: 'server/.nvmrc'
       - run: npm test
@@ -26,11 +28,10 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version-file: 'server/.nvmrc'
           registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
       - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
