@@ -1,8 +1,11 @@
 {
   "name": "@seachicken/shoaku-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "main": "index.js",
+  "bin": {
+    "shoaku-server": "./index.js"
+  },
   "scripts": {
     "test": "node --test"
   },
