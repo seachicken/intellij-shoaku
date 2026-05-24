@@ -54,6 +54,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
     val vm = remember { viewModel }
     val instructionState = rememberTextFieldState()
     val responseScrollState = rememberScrollState()
+    val activeItem = vm.items.find { it.checked == false }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(8.dp),
@@ -82,7 +83,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
         }
 
         Text(
-            text = vm.items.firstOrNull()?.content ?: "Not Found",
+            text = activeItem?.content ?: "Not Found",
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold
         )
@@ -93,7 +94,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items(vm.items.firstOrNull()?.children ?: emptyList()) { model ->
+            items(activeItem?.children ?: emptyList()) { model ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

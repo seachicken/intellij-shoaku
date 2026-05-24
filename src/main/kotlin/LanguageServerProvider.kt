@@ -47,13 +47,9 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
     override fun createLsp4jClient(handler: LspServerNotificationsHandler) = object : Lsp4jClient(handler) {
         @JsonNotification("shoaku/notification")
         fun shoaku(params: ShoakuNotificationParams) {
-            if (params.lists[0].status != null && project.service<ShoakuSettings>().viewModel.items.isNotEmpty()) {
-                project.service<ShoakuSettings>().viewModel.items[0].status = params.lists[0].status
-            } else {
-                project.service<ShoakuSettings>().viewModel.apply {
-                    items = params.lists
-                    response = params.response
-                }
+            project.service<ShoakuSettings>().viewModel.apply {
+                items = params.lists
+                response = params.response
             }
         }
     }

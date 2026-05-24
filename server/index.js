@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import fs, { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import child_process, { spawn } from 'node:child_process';
@@ -167,13 +167,12 @@ appServer.stdout.on('data', (chunk) => {
 });
 
 async function syncShoakuLists(filePath, threadId) {
-  const fileMsg = await sendAppRequest("fs/readFile", {
-    path: initializeParams.initializationOptions.filePath
-  });
-  lists = parser.parse(Buffer.from(fileMsg.result.dataBase64, 'base64').toString('utf-8'));
+  const content = await fs.readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+  lists = parser.parse(content);
   process.stdout.write(
     buildNotification("shoaku/notification", {
-      lists
+      lists,
+      response: ""
     })
   );
 
@@ -189,20 +188,7 @@ async function syncShoakuLists(filePath, threadId) {
         text: `My goal is ${parentItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
       }
     ]}, {
-      onItemStatusChanged: async (id, status) => {
-        process.stdout.write(
-          buildNotification("shoaku/notification", {
-            lists: [{
-              status
-            }]
-          })
-        );
-      },
       onItemCompleted: async (id, params) => {
-        if (params.threadId !== navigatorThreadId) {
-          return;
-        }
-
         process.stdout.write(
           buildNotification("shoaku/notification", {
             lists,

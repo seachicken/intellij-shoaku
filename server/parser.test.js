@@ -29,6 +29,20 @@ test('parse when nested', (t) => {
   );
 });
 
+test('parse when only labeled root', (t) => {
+  assert.deepStrictEqual(parser.parse(`
+- [shoaku] a
+- b
+`), [
+      {
+        type: 'text',
+        content: 'a',
+        children: []
+      }
+    ]
+  );
+});
+
 test('not parse', (t) => {
   assert.deepStrictEqual(parser.parse(`
 - a

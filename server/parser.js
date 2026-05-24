@@ -13,12 +13,12 @@ function parse(text) {
     const label = match[3];
     const content = match[4];
 
-    if (!label && stack[stack.length - 1].indent < 0) {
-      continue;
-    }
-
     while (stack[stack.length - 1].indent >= indent) {
       stack.pop();
+    }
+
+    if (!label && stack[stack.length - 1].indent < 0) {
+      continue;
     }
 
     const parent = stack[stack.length - 1].node;
