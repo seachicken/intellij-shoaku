@@ -5,7 +5,7 @@ graph TD
   subgraph user_workspace["IDE workspace"]
     project-files[(Project files)]
   end
-  subgraph sandbox_workspace["sandbox workspace"]
+  subgraph sandbox_workspace["temporary workspace"]
     worktree-files[(Project files)]
   end
   subgraph codex
