@@ -9,8 +9,13 @@ import com.intellij.platform.lsp.api.LspServerNotificationsHandler
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
+import shoaku.LanguageServerProvider.Companion.SERVER_VERSION
 
 class LanguageServerProvider : LspServerSupportProvider {
+    companion object {
+        const val SERVER_VERSION = "0.1.3"
+    }
+
     override fun fileOpened(
         project: Project,
         file: VirtualFile,
@@ -28,8 +33,9 @@ private open class AppLanguageServerDescriptor(project: Project, name: String) :
 
 private class LanguageServerDescriptor(project: Project) : AppLanguageServerDescriptor(project, "Shoaku") {
     override fun createCommandLine(): GeneralCommandLine {
-        val basePath = project.basePath ?: error("Project base path is not available")
-        return GeneralCommandLine("node", "$basePath/server/index.js")
+//        val basePath = project.basePath ?: error("Project base path is not available")
+//        return GeneralCommandLine("node", "$basePath/server/index.js")
+        return GeneralCommandLine("npx", "@seachicken/shoaku-server@${SERVER_VERSION}")
     }
 
     override fun createInitializationOptions(): Any {
