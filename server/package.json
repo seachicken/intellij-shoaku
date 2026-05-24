@@ -11,5 +11,9 @@
   },
   "author": "Seito Tanaka",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seachicken/intellij-shoaku.git"
+  },
   "description": "Agent server for the Shoaku AI coding assistant"
 }
