@@ -36,7 +36,7 @@ appServer.stdout.on('data', (chunk) => {
       continue;
     }
     const logPrefix = message.params?.threadId === navigatorThreadId ? '[navigator] ' : message.params?.threadId === explorerThreadId ? '[explorer] ' : '';
-    logWarn(`${logPrefix}Received message from app server: ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
+    logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
 
     if (message.id === 0) {
       (async () => {
@@ -223,7 +223,7 @@ process.stdin.on('data', (chunk) => {
     if (headerEnd === -1) break;
 
     const header = buf.slice(0, headerEnd).toString('ascii');
-    // Read "Content-Length: x" header to determine body length
+    // Read "Content-Length: ..." header to determine body length
     const contentLength = parseInt(header.substring(16))
     const bodyStart = headerEnd + 4;
     if (buf.length < bodyStart + contentLength) break;
@@ -238,7 +238,7 @@ process.stdin.on('data', (chunk) => {
       logError(`Received non-JSON message from language client: ${body}`);
       continue;
     }
-    logWarn(`Received message from language client: ${JSON.stringify(message)}`)
+    logInfo(`LC-> ${JSON.stringify(message)}`)
 
     switch (message.method) {
       case 'initialize':
