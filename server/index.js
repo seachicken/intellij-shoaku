@@ -15,6 +15,7 @@ const appServer = spawn('codex', ['app-server'], {
 });
 
 let initializeParams;
+let workDir;
 let navigatorThreadId = '';
 let explorerThreadId = '';
 let lists = [];
@@ -47,7 +48,7 @@ appServer.stdout.on('data', (chunk) => {
             sandbox: 'read-only'
           }),
           (async () => {
-            const workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
+            workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
             logWarn(`Created temporary work directory: ${workDir}`)
             await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir}`);
             return sendAppRequest('thread/start', {
@@ -263,6 +264,12 @@ process.stdin.on('data', (chunk) => {
             }
           }
         }));
+        break;
+
+      case 'shutdown':
+        spawn('git', ['-C', initializeParams.rootPath, 'worktree', 'remove', workDir]);
+        workDir = null;
+        process.stdout.write(buildResponse(message.id, null));
         break;
 
       case 'textDocument/didChange':
