@@ -18,6 +18,7 @@ let initializeParams;
 let workDir;
 let navigatorThreadId = '';
 let explorerThreadId = '';
+let activeParentItem;
 let lists = [];
 
 let appBuf = Buffer.alloc(0);
@@ -41,6 +42,8 @@ appServer.stdout.on('data', (chunk) => {
 
     if (message.id === 0) {
       (async () => {
+        syncShoakuLists(initializeParams.initializationOptions.filePath);
+
         const [navigatorRes, explorerRes] = await Promise.all([
           sendAppRequest('thread/start', {
             cwd: initializeParams.rootPath,
@@ -107,10 +110,28 @@ appServer.stdout.on('data', (chunk) => {
           })
         ]);
 
-        await Promise.all([
-          syncShoakuLists(initializeParams.initializationOptions.filePath, navigatorThreadId),
-          syncShoakuLists(initializeParams.initializationOptions.filePath, explorerThreadId)
-        ]);
+        activeParentItem = findActiveParentItem(lists);
+        const childItem = findActiveItem(activeParentItem?.children ?? []);
+        logWarn(`Parent item: ${activeParentItem?.content}, child item: ${childItem?.content}`)
+
+        await startTurn({
+          threadId: navigatorThreadId,
+          input: [
+            {
+              type: "text",
+              text: `My goal is ${activeParentItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
+            }
+          ]}, {
+            onItemCompleted: async (id, params) => {
+              process.stdout.write(
+                buildNotification("shoaku/notification", {
+                  lists,
+                  response: params.item.text
+                })
+              );
+            }
+          }
+        );
       })();
 
       appServer.stdin.write(JSON.stringify(buildAppRequest("fs/watch", {
@@ -137,7 +158,7 @@ appServer.stdout.on('data', (chunk) => {
 
     if (message.params?.turnId != null && pendingTurns.has(message.params.turnId)) {
       const { id, callbacks } = pendingTurns.get(message.params.turnId);
-      if (message.method === 'item/completed') {
+      if (message.method === 'item/completed' && message.params.item.type === 'agentMessage') {
         callbacks?.onItemCompleted(id, message.params)
       }
     }
@@ -157,47 +178,44 @@ appServer.stdout.on('data', (chunk) => {
     if (initializeParams.initializationOptions?.filePath) {
       if (message.params?.watchId === initializeParams.initializationOptions.filePath && navigatorThreadId) {
         (async () => {
-          await Promise.all([
-            syncShoakuLists(initializeParams.initializationOptions.filePath, navigatorThreadId),
-            syncShoakuLists(initializeParams.initializationOptions.filePath, explorerThreadId)
-          ]);
+          syncShoakuLists(initializeParams.initializationOptions.filePath);
+
+          for (const item of lists) {
+            if (item.type === activeParentItem?.type && item.content === activeParentItem?.content && item.checked) {
+              await startTurn({
+                threadId: navigatorThreadId,
+                input: [
+                  {
+                    type: "text",
+                    text: `Regarding ${activeParentItem?.content}, summarize only the conversations that will be useful in the future, listing them as bullet points.`
+                  }
+                ]}, {
+                  onItemCompleted: async (id, params) => {
+                    process.stdout.write(
+                      buildNotification("shoaku/showDiff", {
+                        response: params.item.text
+                      })
+                    );
+                  }
+                }
+              );
+              break;
+            }
+          }
         })();
       }
     }
   }
 });
 
-async function syncShoakuLists(filePath, threadId) {
+async function syncShoakuLists(filePath) {
   const content = await fs.readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
   lists = parser.parse(content);
   process.stdout.write(
     buildNotification("shoaku/notification", {
       lists,
-      response: ""
+      response: "..."
     })
-  );
-
-  const parentItem = findActiveParentItem(lists);
-  const childItem = findActiveItem(lists);
-  logWarn(`Parent item: ${parentItem?.content}, child item: ${childItem?.content}`)
-
-  await startTurn({
-    threadId,
-    input: [
-      {
-        type: "text",
-        text: `My goal is ${parentItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
-      }
-    ]}, {
-      onItemCompleted: async (id, params) => {
-        process.stdout.write(
-          buildNotification("shoaku/notification", {
-            lists,
-            response: params.item.text
-          })
-        );
-      }
-    }
   );
 }
 
@@ -272,7 +290,7 @@ process.stdin.on('data', (chunk) => {
         process.stdout.write(buildResponse(message.id, null));
         break;
 
-      case 'textDocument/didChange':
+      case 'textDocument/didSave':
         if (navigatorThreadId) {
           sendAppRequest('thread/inject_items', {
             threadId: navigatorThreadId,
@@ -339,17 +357,17 @@ function findActiveParentItem(lists) {
   return null;
 }
 
-function findActiveItem(lists, root = true) {
+function findActiveItem(lists) {
   if (!lists) {
     return null;
   }
 
   for (const item of lists) {
-    if (!root && item.checked === false) {
+    if (item.checked === false) {
       return item;
     }
 
-    const found = findActiveItem(item.children, false);
+    const found = findActiveItem(item.children);
     if (found) {
       return found;
     }
@@ -360,8 +378,11 @@ function findActiveItem(lists, root = true) {
 
 const pendingTurns = new Map();
 async function startTurn(params, callbacks) {
-  if (pendingTurns.size > 0) {
-    return;
+  for (const turnId of pendingTurns.keys()) {
+    await sendAppRequest('turn/interrupt', {
+      threadId: navigatorThreadId,
+      turnId
+    });
   }
 
   const msg = await sendAppRequest('turn/start', params);
