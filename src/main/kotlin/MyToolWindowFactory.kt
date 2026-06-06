@@ -1,12 +1,14 @@
 package shoaku
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -28,8 +30,11 @@ import com.intellij.platform.lsp.api.LspServerManager
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.OutlinedButton
+import org.jetbrains.jewel.ui.component.TabData
+import org.jetbrains.jewel.ui.component.TabStrip
 import org.jetbrains.jewel.ui.component.Text
 import org.jetbrains.jewel.ui.component.TextField
+import org.jetbrains.jewel.ui.component.styling.LocalDefaultTabStyle
 
 class MyToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
@@ -49,15 +54,192 @@ class MyToolWindowFactory : ToolWindowFactory {
 }
 
 @Composable
-private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSettings.State, project: Project? = null) {
+private fun MyToolWindowContent(
+    viewModel: ShoakuViewModel,
+    state: ShoakuSettings.State,
+    project: Project? = null,
+    initialOpenSessionKeys: List<SessionKey> = emptyList(),
+    initialSelectedSessionKey: SessionKey? = null
+) {
     val filePathState = rememberTextFieldState(initialText = state.filePath)
     val vm = remember { viewModel }
-    val instructionState = rememberTextFieldState()
-    val responseScrollState = rememberScrollState()
-    val activeItem = vm.items.find { it.checked == false }
+    val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
+    var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
+    val sessions = vm.items
+    val openSessions = openSessionKeys.mapNotNull { key -> sessions.firstOrNull { it.sessionKey == key } }
+    val selectedSession = selectedSessionKey?.let { key -> sessions.firstOrNull { it.sessionKey == key } }
+
+    LaunchedEffect(sessions) {
+        val currentKeys = sessions.map { it.sessionKey }.toSet()
+        openSessionKeys.removeAll { it !in currentKeys }
+        if (selectedSessionKey != null && selectedSessionKey !in currentKeys) {
+            selectedSessionKey = null
+        }
+    }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(8.dp),
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        SessionTabStrip(
+            openSessions = openSessions,
+            selectedSessionKey = selectedSessionKey,
+            onSelectSessions = { selectedSessionKey = null },
+            onSelectSession = { selectedSessionKey = it },
+            onCloseSession = { key ->
+                openSessionKeys.remove(key)
+                if (selectedSessionKey == key) {
+                    selectedSessionKey = null
+                }
+            }
+        )
+
+        if (selectedSession == null) {
+            SessionListContent(
+                sessions = sessions,
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                onOpenSession = { session ->
+                    project?.let {
+                        LspServerManager.getInstance(project)
+                            .getServersForProvider(LanguageServerProvider::class.java)
+                            .first()
+                            .sendNotification { (it as AppLanguageServer).startSession(StartSessionParams(session.shoakuId)) }
+                    }
+                    val key = session.sessionKey
+                    if (key !in openSessionKeys) {
+                        openSessionKeys.add(key)
+                    }
+                    selectedSessionKey = key
+                }
+            )
+        } else {
+            SessionDetailContent(
+                viewModel = vm,
+                session = selectedSession,
+                project = project,
+                filePathState = filePathState,
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    }
+
+    LaunchedEffect(filePathState.text) {
+        state.filePath = filePathState.text.toString()
+    }
+}
+
+@Composable
+private fun SessionTabStrip(
+    openSessions: List<Item>,
+    selectedSessionKey: SessionKey?,
+    onSelectSessions: () -> Unit,
+    onSelectSession: (SessionKey) -> Unit,
+    onCloseSession: (SessionKey) -> Unit
+) {
+    val tabs = buildList {
+        add(
+            TabData.Default(
+                selected = selectedSessionKey == null,
+                content = { Text("Sessions") },
+                closable = false,
+                onClose = {},
+                onClick = onSelectSessions
+            )
+        )
+        openSessions.forEach { session ->
+            val key = session.sessionKey
+            add(
+                TabData.Default(
+                    selected = selectedSessionKey == key,
+                    content = { Text(session.content) },
+                    closable = true,
+                    onClose = { onCloseSession(key) },
+                    onClick = { onSelectSession(key) }
+                )
+            )
+        }
+    }
+
+    TabStrip(
+        tabs = tabs,
+        style = LocalDefaultTabStyle.current,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun SessionListContent(
+    sessions: List<Item>,
+    modifier: Modifier = Modifier,
+    onOpenSession: (Item) -> Unit
+) {
+    if (sessions.isEmpty()) {
+        Box(
+            modifier = modifier,
+            contentAlignment = Alignment.Center
+        ) {
+            Text("No sessions")
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        itemsIndexed(sessions) { index, session ->
+            val activeChild = session.children.firstOrNull { it.checked == false }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        color = if (session.checked ?: false) Color(0xFF1E1E2A) else Color(0xFF2D2D3F),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .clickable { onOpenSession(session) }
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = session.content,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = activeChild?.status?.takeIf { it.isNotBlank() }
+                            ?: "${session.children.size} items",
+                        fontSize = 12.sp,
+                        color = Color(0xFFB8C0D0)
+                    )
+                }
+                Text(
+                    text = "#${index + 1}",
+                    fontSize = 12.sp,
+                    color = Color(0xFFB8C0D0)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionDetailContent(
+    viewModel: ShoakuViewModel,
+    session: Item,
+    project: Project? = null,
+    filePathState: androidx.compose.foundation.text.input.TextFieldState,
+    modifier: Modifier = Modifier
+) {
+    val instructionState = rememberTextFieldState()
+    val responseScrollState = rememberScrollState()
+
+    Column(
+        modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Row(
@@ -83,7 +265,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
         }
 
         Text(
-            text = activeItem?.content ?: "Not Found",
+            text = session.content,
             fontSize = 16.sp,
             fontWeight = FontWeight.Bold
         )
@@ -94,7 +276,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items(activeItem?.children ?: emptyList()) { model ->
+            items(session.children) { model ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -121,7 +303,8 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
         }
 
         Spacer(modifier = Modifier.height(4.dp))
-        if (vm.response.isNotBlank()) {
+
+        if (session.response?.isNotBlank() == true) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -143,7 +326,7 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
                         .verticalScroll(responseScrollState)
                 ) {
                     SelectionContainer {
-                        Text(vm.response)
+                        Text(session.response)
                     }
                 }
                 if (responseScrollState.maxValue > 0 && responseScrollState.value < responseScrollState.maxValue) {
@@ -177,43 +360,89 @@ private fun MyToolWindowContent(viewModel: ShoakuViewModel, state: ShoakuSetting
             TextField(
                 state = instructionState,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Input...") }
+                placeholder = { Text("Input...") },
+                enabled = session.shoakuId != null
             )
-            OutlinedButton(onClick = {
-                val instruction = instructionState.text.toString()
-                if (instruction.isNotBlank()) {
-                    project?.let {
-                        LspServerManager.getInstance(project)
-                            .getServersForProvider(LanguageServerProvider::class.java)
-                            .first()
-                            .sendNotification { (it as AppLanguageServer).reply(ReplyParams(instruction)) }
-                    }
+            OutlinedButton(
+                onClick = {
+                    val instruction = instructionState.text.toString()
+                    if (instruction.isNotBlank()) {
+                        project?.let {
+                            LspServerManager.getInstance(project)
+                                .getServersForProvider(LanguageServerProvider::class.java)
+                                .first()
+                                .sendNotification {
+                                    (it as AppLanguageServer).reply(
+                                        ReplyParams(
+                                            session.shoakuId!!,
+                                            instruction
+                                        )
+                                    )
+                                }
+                        }
 
-                    instructionState.setTextAndPlaceCursorAtEnd("")
-                }
-            }) {
+                        instructionState.setTextAndPlaceCursorAtEnd("")
+                    }
+                },
+                enabled = session.shoakuId != null
+            ) {
                 Text("Send")
             }
         }
     }
+}
 
-    LaunchedEffect(filePathState.text) {
-        state.filePath = filePathState.text as String
-    }
+private data class SessionKey(
+    val type: String,
+    val content: String
+)
+
+private val Item.sessionKey
+    get() = SessionKey(type, content)
+
+@Composable
+@Preview
+fun MyToolWindowSessionListPreview() {
+    MyToolWindowContent(
+        sampleShoakuViewModel(),
+        ShoakuSettings.State(filePath = "/tmp/shoaku-todo.md")
+    )
 }
 
 @Composable
 @Preview
-fun MyToolWindowContentPreview() {
-    MyToolWindowContent(ShoakuViewModel().apply {
-        items = listOf(
-            Item(
-                "", "aaa", children = listOf(
-                    Item("", "bbb?", checked = true),
-                    Item("", "ccc?", checked = false, status = "In Progress")
-                )
+fun MyToolWindowSessionTabsPreview() {
+    val viewModel = sampleShoakuViewModel()
+    val openSessions = viewModel.items.take(2).map { it.sessionKey }
+
+    MyToolWindowContent(
+        viewModel,
+        ShoakuSettings.State(filePath = "/tmp/shoaku-todo.md"),
+        initialOpenSessionKeys = openSessions,
+        initialSelectedSessionKey = openSessions.firstOrNull()
+    )
+}
+
+private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
+    items = listOf(
+        Item(
+            "text",
+            "aaa",
+            checked = false,
+            children = listOf(
+                Item("text", "aaa-1", checked = true, status = "Done"),
+                Item("text", "aaa-2", checked = false, status = "In Progress"),
+            ),
+            response = "AI response"
+        ),
+        Item(
+            "text",
+            "bbb",
+            checked = null,
+            children = listOf(
+                Item("text", "bbb-1", checked = false, status = "Next"),
+                Item("text", "bbb-2", checked = null)
             )
         )
-        response = "hogehoge"
-    }, ShoakuSettings.State())
+    )
 }

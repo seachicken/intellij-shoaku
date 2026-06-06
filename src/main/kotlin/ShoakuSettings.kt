@@ -24,5 +24,4 @@ class ShoakuSettings : PersistentStateComponent<ShoakuSettings.State> {
 
 class ShoakuViewModel {
     var items by mutableStateOf<List<Item>>(emptyList())
-    var response by mutableStateOf("")
 }

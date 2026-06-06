@@ -1,9 +1,11 @@
 function parse(text) {
   const root = { children: [] };
   const stack = [{ indent: -1, node: root }];
+  let lineNumber = 0;
 
   for (const line of text.split('\n')) {
-    const match = line.match(/^(\s*)(?:- |\* |)(\[[ |x]\]|) *(\[shoaku\]|) *(.+)$/);
+    lineNumber++;
+    const match = line.match(/^(\s*)(?:- |\* |)(\[[ |x]\]|) *(?:\[(shoaku(?:-[A-Za-z0-9]+)?)\])? *(.+)$/);
     if (!match) {
       continue;
     }
@@ -25,8 +27,10 @@ function parse(text) {
     const node = {
       type: 'text',
       content,
+      line: lineNumber,
       children: [],
-      ...(checked && { checked: checked === '[x]' })
+      ...(checked && { checked: checked === '[x]' }),
+      ...(label && label !== 'shoaku' && { shoakuId: label })
     };
     parent.children.push(node);
     stack.push({ indent, node });

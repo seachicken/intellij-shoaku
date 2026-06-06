@@ -1,5 +1,6 @@
-import fs, { mkdtemp } from 'node:fs/promises';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { mkdir, mkdtemp, readFile, watch, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import child_process, { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,10 @@ const appServer = spawn('codex', ['app-server'], {
     RUST_LOG: 'debug'
   }
 });
+const shoakuDir = join(homedir(), '.shoaku');
+const sessionsDir = join(shoakuDir, 'sessions');
+const sessionToShoaku = new Map();
+const shoakuToSession = new Map();
 
 let initializeParams;
 let workDir;
@@ -39,106 +44,6 @@ appServer.stdout.on('data', (chunk) => {
     }
     const logPrefix = message.params?.threadId === navigatorThreadId ? '[navigator] ' : message.params?.threadId === explorerThreadId ? '[explorer] ' : '';
     logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
-
-    if (message.id === 0) {
-      (async () => {
-        syncShoakuLists(initializeParams.initializationOptions.filePath);
-
-        const [navigatorRes, explorerRes] = await Promise.all([
-          sendAppRequest('thread/start', {
-            cwd: initializeParams.rootPath,
-            approvalPolicy: 'never',
-            sandbox: 'read-only'
-          }),
-          (async () => {
-            workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
-            logWarn(`Created temporary work directory: ${workDir}`)
-            await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir}`);
-            return sendAppRequest('thread/start', {
-              cwd: workDir,
-              approvalPolicy: 'on-request',
-              sandbox: 'workspace-write'
-            })
-          })()
-        ]);
-        navigatorThreadId = navigatorRes.result.thread.id;
-        explorerThreadId = explorerRes.result.thread.id;
-
-        await Promise.all([
-          sendAppRequest('thread/inject_items', {
-            threadId: navigatorThreadId,
-            items: [
-              {
-                type: 'message',
-                role: 'developer',
-                content: [
-                  {
-                    type: 'input_text',
-                    text: `
-                    You are an assistant that helps developers understand and progress their work.
-
-                    Responsibilities:
-                    - Understand the user's overall goals and short-term tasks from their TODO list.
-                    - Use LSP events to observe user actions.
-                    - Provide step-by-step guidance and sample code showing what the user should do next.
-                    `
-                  }
-                ]
-              }
-            ]
-          }),
-          sendAppRequest('thread/inject_items', {
-            threadId: explorerThreadId,
-            items: [
-              {
-                type: 'message',
-                role: 'developer',
-                content: [
-                  {
-                    type: 'input_text',
-                    text: `
-                    You can understand what the developer wants to achieve and implement it autonomously.
-
-                    Responsibilities:
-                    - Understand the user's overall goals and short-term tasks from their TODO list.
-                    - Independently generate code to achieve the user's goals.
-                    `
-                  }
-                ]
-              }
-            ]
-          })
-        ]);
-
-        activeParentItem = findActiveParentItem(lists);
-        const childItem = findActiveItem(activeParentItem?.children ?? []);
-        logWarn(`Parent item: ${activeParentItem?.content}, child item: ${childItem?.content}`)
-
-        await startTurn({
-          threadId: navigatorThreadId,
-          input: [
-            {
-              type: "text",
-              text: `My goal is ${activeParentItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
-            }
-          ]}, {
-            onItemCompleted: async (id, params) => {
-              process.stdout.write(
-                buildNotification("shoaku/notification", {
-                  lists,
-                  response: params.item.text
-                })
-              );
-            }
-          }
-        );
-      })();
-
-      appServer.stdin.write(JSON.stringify(buildAppRequest("fs/watch", {
-        watchId: initializeParams.initializationOptions.filePath,
-        path: initializeParams.initializationOptions.filePath
-      })) + '\n');
-    }
 
     if (message.id != null && pendingRequests.has(message.id)) {
       const { resolve, reject } = pendingRequests.get(message.id);
@@ -174,49 +79,152 @@ appServer.stdout.on('data', (chunk) => {
         }
       }
     }
-
-    if (initializeParams.initializationOptions?.filePath) {
-      if (message.params?.watchId === initializeParams.initializationOptions.filePath && navigatorThreadId) {
-        (async () => {
-          syncShoakuLists(initializeParams.initializationOptions.filePath);
-
-          for (const item of lists) {
-            if (item.type === activeParentItem?.type && item.content === activeParentItem?.content && item.checked) {
-              await startTurn({
-                threadId: navigatorThreadId,
-                input: [
-                  {
-                    type: "text",
-                    text: `Regarding ${activeParentItem?.content}, summarize only the conversations that will be useful in the future, listing them as bullet points.`
-                  }
-                ]}, {
-                  onItemCompleted: async (id, params) => {
-                    process.stdout.write(
-                      buildNotification("shoaku/showDiff", {
-                        response: params.item.text
-                      })
-                    );
-                  }
-                }
-              );
-              break;
-            }
-          }
-        })();
-      }
-    }
   }
 });
 
+async function startNewSession() {
+  workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
+  const shoakuId = basename(workDir);
+
+  const [navigatorRes, explorerRes] = await Promise.all([
+    sendAppRequest('thread/start', {
+      cwd: initializeParams.rootPath,
+      approvalPolicy: 'never',
+      sandbox: 'read-only'
+    }),
+    (async () => {
+      logWarn(`Created temporary work directory: ${workDir}`)
+      await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir}`);
+      return sendAppRequest('thread/start', {
+        cwd: workDir,
+        approvalPolicy: 'on-request',
+        sandbox: 'workspace-write'
+      })
+    })()
+  ]);
+  navigatorThreadId = navigatorRes.result.thread.id;
+  explorerThreadId = explorerRes.result.thread.id;
+  sessionToShoaku.set(navigatorThreadId, shoakuId);
+  shoakuToSession.set(shoakuId, navigatorThreadId);
+
+  await Promise.all([
+    sendAppRequest('thread/inject_items', {
+      threadId: navigatorThreadId,
+      items: [
+        {
+          type: 'message',
+          role: 'developer',
+          content: [
+            {
+              type: 'input_text',
+              text: `
+              You are an assistant that helps developers understand and progress their work.
+
+              Responsibilities:
+              - Understand the user's overall goals and short-term tasks from their TODO list.
+              - Use LSP events to observe user actions.
+              - Provide step-by-step guidance and sample code showing what the user should do next.
+              `
+            }
+          ]
+        }
+      ]
+    }),
+    sendAppRequest('thread/inject_items', {
+      threadId: explorerThreadId,
+      items: [
+        {
+          type: 'message',
+          role: 'developer',
+          content: [
+            {
+              type: 'input_text',
+              text: `
+              You can understand what the developer wants to achieve and implement it autonomously.
+
+              Responsibilities:
+              - Understand the user's overall goals and short-term tasks from their TODO list.
+              - Independently generate code to achieve the user's goals.
+              `
+            }
+          ]
+        }
+      ]
+    })
+  ]);
+
+  const childItem = findActiveItem(activeParentItem?.children ?? []);
+  logWarn(`Parent item: ${activeParentItem?.content}, child item: ${childItem?.content}`)
+
+  const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+  const lines = content.split('\n');
+  lines[activeParentItem.line - 1] = lines[activeParentItem.line - 1].replace(
+    '[shoaku]', `[${shoakuId}]`
+  );
+  await writeFile(initializeParams.initializationOptions.filePath, lines.join('\n'), { encoding: 'utf8' });
+  const sessionDir = join(sessionsDir, shoakuId);
+  await mkdir(sessionDir, { recursive: true });
+  const metaData = {
+    navigatorSessionId: navigatorThreadId,
+    explorerSessionId: explorerThreadId
+  };
+  await writeFile(join(sessionDir, 'meta.json'), JSON.stringify(metaData, null, 2), { flag: "wx" }).catch((e) => {
+    if (e.code !== 'EEXIST') {
+      throw e;
+    }
+  });
+
+  startTurn({
+    threadId: navigatorThreadId,
+    input: [
+      {
+        type: "text",
+        text: `My goal is ${activeParentItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
+      }
+    ]}, {
+      onItemCompleted: async (id, params) => {
+        findItemByShoakuId(lists, sessionToShoaku.get(params.threadId)).response = params.item.text;
+        process.stdout.write(
+          buildNotification("shoaku/notification", {
+            lists
+          })
+        );
+      }
+    }
+  );
+}
+
+async function resumeSession(shoakuId) {
+  const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
+  logWarn(`metaData: ${JSON.stringify(metaData)}`);
+  if (!metaData.navigatorSessionId || !metaData.explorerSessionId) {
+    logWarn(`Invalid session metadata for shoakuId ${shoakuId}`);
+    return;
+  }
+
+  const [navigatorRes, explorerRes] = await Promise.all([
+    sendAppRequest('thread/resume', {
+      threadId: metaData.navigatorSessionId
+    }),
+    sendAppRequest('thread/resume', {
+      threadId: metaData.explorerSessionId
+    })
+  ]);
+  navigatorThreadId = navigatorRes.result.thread.id;
+  explorerThreadId = explorerRes.result.thread.id;
+  sessionToShoaku.set(navigatorThreadId, shoakuId);
+  shoakuToSession.set(shoakuId, navigatorThreadId);
+}
+
 async function syncShoakuLists(filePath) {
-  const content = await fs.readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+  const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
   lists = parser.parse(content);
   process.stdout.write(
     buildNotification("shoaku/notification", {
-      lists,
-      response: "..."
+      lists
     })
   );
+  return lists;
 }
 
 let appErrBuf = Buffer.alloc(0);
@@ -234,7 +242,7 @@ appServer.stderr.on('data', (chunk) => {
 });
 
 let buf = Buffer.alloc(0);
-process.stdin.on('data', (chunk) => {
+process.stdin.on('data', async (chunk) => {
   buf = Buffer.concat([buf, chunk]);
 
   while (true) {
@@ -261,7 +269,20 @@ process.stdin.on('data', (chunk) => {
 
     switch (message.method) {
       case 'initialize':
+        await mkdir(shoakuDir, { recursive: true });
+        await mkdir(sessionsDir, { recursive: true });
+        const data = `
+---
+todo_path: 
+`.trimStart();
+        await writeFile(join(shoakuDir, 'config.yaml'), data, { flag: "wx" }).catch((e) => {
+          if (e.code !== 'EEXIST') {
+            throw e;
+          }
+        });
+
         initializeParams = message.params;
+        syncShoakuLists(initializeParams.initializationOptions.filePath);
 
         appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
           clientInfo: {
@@ -282,6 +303,44 @@ process.stdin.on('data', (chunk) => {
             }
           }
         }));
+
+        (async () => {
+          try {
+            for await (const event of watch(initializeParams.initializationOptions.filePath)) {
+              const lists = await syncShoakuLists(initializeParams.initializationOptions.filePath);
+              activeParentItem = findActiveParentItem(lists);
+              if (activeParentItem && activeParentItem.shoakuId == null) {
+                logWarn('Start new session');
+                await startNewSession();
+              }
+
+              for (const item of lists) {
+                if (item.type === activeParentItem?.type && item.content === activeParentItem?.content && item.checked) {
+                  await startTurn({
+                    threadId: navigatorThreadId,
+                    input: [
+                      {
+                        type: "text",
+                        text: `Regarding ${activeParentItem?.content}, summarize only the conversations that will be useful in the future, listing them as bullet points.`
+                      }
+                    ]}, {
+                      onItemCompleted: async (id, params) => {
+                        process.stdout.write(
+                          buildNotification("shoaku/showDiff", {
+                            response: params.item.text
+                          })
+                        );
+                      }
+                    }
+                  );
+                  break;
+                }
+              }
+            }
+          } catch (err) {
+            logError(`Error watching file: ${err.message}`);
+          }
+        })();
         break;
 
       case 'shutdown':
@@ -310,30 +369,37 @@ process.stdin.on('data', (chunk) => {
         }
         break;
 
-      case 'shoaku/reply':
-        if (navigatorThreadId) {
-          const text = message.params?.text ?? message.text;
-          (async () => {
-            await startTurn({
-              threadId: navigatorThreadId,
-              input: [
-                {
-                  type: 'text',
-                  text
-                }
-              ]}, {
-                onItemCompleted: async (id, params) => {
-                  process.stdout.write(
-                    buildNotification("shoaku/notification", {
-                      lists,
-                      response: params.item.text
-                    })
-                  );
-                }
-              }
-            );
-          })();
+      case 'shoaku/startSession':
+        if (message.params.shoakuId) {
+          resumeSession(message.params.shoakuId);
         }
+        break;
+
+      case 'shoaku/reply':
+        const sessionId = shoakuToSession.get(message.params.shoakuId);
+        if (!sessionId) {
+          logWarn(`No active session found for shoakuId ${message.params.shoakuId}`);
+          break;
+        }
+
+        await startTurn({
+          threadId: sessionId,
+          input: [
+            {
+              type: 'text',
+              text: message.params.text
+            }
+          ]}, {
+            onItemCompleted: async (id, params) => {
+              findItemByShoakuId(lists, sessionToShoaku.get(params.threadId)).response = params.item.text;
+              process.stdout.write(
+                buildNotification("shoaku/notification", {
+                  lists
+                })
+              );
+            }
+          }
+        );
         break;
     }
   }
@@ -342,6 +408,14 @@ process.stdin.on('data', (chunk) => {
 process.stdin.on('end', () => {
   appServer.stdin.end();
 });
+
+function findItemByShoakuId(lists, shoakuId) {
+  if (!lists) {
+    return null;
+  }
+
+  return lists.find((item) => item.shoakuId === shoakuId);
+}
 
 function findActiveParentItem(lists) {
   if (!lists) {

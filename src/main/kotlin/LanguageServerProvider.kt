@@ -49,9 +49,6 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
         fun shoaku(params: ShoakuNotificationParams) {
             project.service<ShoakuSettings>().viewModel.apply {
                 items = params.lists
-                if (params.response.isNotBlank()) {
-                    response = params.response
-                }
             }
         }
 
@@ -59,7 +56,6 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
         fun showDiff(params: ShoakuShowDiffParams) {
             project.service<ShoakuSettings>().viewModel.apply {
                 if (params.response.isNotBlank()) {
-                    response = params.response
                 }
             }
         }
@@ -67,8 +63,7 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
 }
 
 data class ShoakuNotificationParams(
-    val lists: List<Item>,
-    val response: String
+    val lists: List<Item>
 )
 
 data class Item(
@@ -76,7 +71,9 @@ data class Item(
     val content: String,
     val checked: Boolean? = null,
     var status: String = "",
-    val children: List<Item> = emptyList()
+    val children: List<Item> = emptyList(),
+    val shoakuId: String? = null,
+    val response: String? = null
 )
 
 data class ShoakuShowDiffParams(
