@@ -158,9 +158,10 @@ async function startNewSession() {
 
   const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
   const lines = content.split('\n');
-  lines[activeParentItem.line - 1] = lines[activeParentItem.line - 1].replace(
-    '[shoaku]', `[${shoakuId}]`
-  );
+  lines[activeParentItem.line] =
+    lines[activeParentItem.line].slice(0, activeParentItem.labelPosition.start)
+    + `[${shoakuId}]`
+    + lines[activeParentItem.line].slice(activeParentItem.labelPosition.end);
   await writeFile(initializeParams.initializationOptions.filePath, lines.join('\n'), { encoding: 'utf8' });
   const sessionDir = join(sessionsDir, shoakuId);
   await mkdir(sessionDir, { recursive: true });
