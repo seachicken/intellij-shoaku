@@ -97,6 +97,8 @@ private fun MyToolWindowContent(
         if (selectedSession == null) {
             SessionListContent(
                 sessions = sessions,
+                filePathState = filePathState,
+                project = project,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 onOpenSession = { session ->
                     project?.let {
@@ -114,10 +116,8 @@ private fun MyToolWindowContent(
             )
         } else {
             SessionDetailContent(
-                viewModel = vm,
                 session = selectedSession,
                 project = project,
-                filePathState = filePathState,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }
@@ -170,6 +170,8 @@ private fun SessionTabStrip(
 @Composable
 private fun SessionListContent(
     sessions: List<Item>,
+    filePathState: androidx.compose.foundation.text.input.TextFieldState,
+    project: Project?,
     modifier: Modifier = Modifier,
     onOpenSession: (Item) -> Unit
 ) {
@@ -182,61 +184,6 @@ private fun SessionListContent(
         }
         return
     }
-
-    LazyColumn(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        itemsIndexed(sessions) { index, session ->
-            val activeChild = session.children.firstOrNull { it.checked == false }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(
-                        color = if (session.checked ?: false) Color(0xFF1E1E2A) else Color(0xFF2D2D3F),
-                        shape = RoundedCornerShape(12.dp)
-                    )
-                    .clickable { onOpenSession(session) }
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        text = session.content,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = activeChild?.status?.takeIf { it.isNotBlank() }
-                            ?: "${session.children.size} items",
-                        fontSize = 12.sp,
-                        color = Color(0xFFB8C0D0)
-                    )
-                }
-                Text(
-                    text = "#${index + 1}",
-                    fontSize = 12.sp,
-                    color = Color(0xFFB8C0D0)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SessionDetailContent(
-    viewModel: ShoakuViewModel,
-    session: Item,
-    project: Project? = null,
-    filePathState: androidx.compose.foundation.text.input.TextFieldState,
-    modifier: Modifier = Modifier
-) {
-    val instructionState = rememberTextFieldState()
-    val responseScrollState = rememberScrollState()
 
     Column(
         modifier = modifier,
@@ -264,6 +211,64 @@ private fun SessionDetailContent(
             }
         }
 
+        LazyColumn(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            itemsIndexed(sessions) { index, session ->
+                val activeChild = session.children.firstOrNull { it.checked == false }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            color = if (session.checked ?: false) Color(0xFF1E1E2A) else Color(0xFF2D2D3F),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        .clickable { onOpenSession(session) }
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = session.content,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = activeChild?.status?.takeIf { it.isNotBlank() }
+                                ?: "${session.children.size} items",
+                            fontSize = 12.sp,
+                            color = Color(0xFFB8C0D0)
+                        )
+                    }
+                    Text(
+                        text = "#${index + 1}",
+                        fontSize = 12.sp,
+                        color = Color(0xFFB8C0D0)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionDetailContent(
+    session: Item,
+    project: Project? = null,
+    modifier: Modifier = Modifier
+) {
+    val instructionState = rememberTextFieldState()
+    val responseScrollState = rememberScrollState()
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
         Text(
             text = session.content,
             fontSize = 16.sp,
