@@ -2,22 +2,22 @@ package shoaku
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intellij.openapi.components.service
@@ -29,11 +29,7 @@ import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.platform.lsp.api.LspServerManager
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.addComposeTab
-import org.jetbrains.jewel.ui.component.OutlinedButton
-import org.jetbrains.jewel.ui.component.TabData
-import org.jetbrains.jewel.ui.component.TabStrip
-import org.jetbrains.jewel.ui.component.Text
-import org.jetbrains.jewel.ui.component.TextField
+import org.jetbrains.jewel.ui.component.*
 import org.jetbrains.jewel.ui.component.styling.LocalDefaultTabStyle
 
 class MyToolWindowFactory : ToolWindowFactory {
@@ -117,6 +113,8 @@ private fun MyToolWindowContent(
         } else {
             SessionDetailContent(
                 session = selectedSession,
+                filePath = state.filePath,
+                viewModel = vm,
                 project = project,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
             )
@@ -175,16 +173,6 @@ private fun SessionListContent(
     modifier: Modifier = Modifier,
     onOpenSession: (Item) -> Unit
 ) {
-    if (sessions.isEmpty()) {
-        Box(
-            modifier = modifier,
-            contentAlignment = Alignment.Center
-        ) {
-            Text("No sessions")
-        }
-        return
-    }
-
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -209,6 +197,16 @@ private fun SessionListContent(
             }) {
                 Text(MyMessageBundle.message("toolwindow.MyToolWindow.filePath.browse.button"))
             }
+        }
+
+        if (sessions.isEmpty()) {
+            Box(
+                modifier = modifier,
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No sessions")
+            }
+            return
         }
 
         LazyColumn(
@@ -259,11 +257,14 @@ private fun SessionListContent(
 @Composable
 private fun SessionDetailContent(
     session: Item,
+    filePath: String,
+    viewModel: ShoakuViewModel,
     project: Project? = null,
     modifier: Modifier = Modifier
 ) {
     val instructionState = rememberTextFieldState()
     val responseScrollState = rememberScrollState()
+    val diffResponse = session.shoakuId?.let { viewModel.diffResponses[it] }
 
     Column(
         modifier = modifier,
@@ -301,6 +302,54 @@ private fun SessionDetailContent(
                                 )
                                 Text(model.content)
                             }
+                        }
+                    }
+                }
+            }
+            if (diffResponse?.response?.isNotBlank() == true) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = Color(0xFF203224),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "AI Summary",
+                                fontWeight = FontWeight.Bold
+                            )
+                            SelectionContainer {
+                                Text(diffResponse.diff)
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                project?.let {
+                                    LspServerManager.getInstance(project)
+                                        .getServersForProvider(LanguageServerProvider::class.java)
+                                        .first()
+                                        .sendNotification {
+                                            (it as AppLanguageServer).applyDiff(
+                                                ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
+                                            )
+                                        }
+                                }
+                                session.shoakuId.let { shoakuId ->
+                                    viewModel.diffResponses.remove(shoakuId)
+                                }
+                            },
+                            enabled = filePath.isNotBlank()
+                        ) {
+                            Text("Apply")
                         }
                     }
                 }
@@ -438,7 +487,8 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
                 Item("text", "aaa-1", checked = true, status = "Done"),
                 Item("text", "aaa-2", checked = false, status = "In Progress"),
             ),
-            response = "AI response"
+            response = "AI response",
+            shoakuId = "shoaku-preview-1"
         ),
         Item(
             "text",
@@ -449,5 +499,14 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
                 Item("text", "bbb-2", checked = null)
             )
         )
+    )
+    diffResponses["shoaku-preview-1"] = ShoakuShowDiffParams(
+        shoakuId = "shoaku-preview-1",
+        response = "- Extract common setup\n- Reuse validated command sequence",
+        diff = """
+            - a
+            +  - a-a
+            - b
+        """.trimIndent()
     )
 }

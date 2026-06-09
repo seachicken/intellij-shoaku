@@ -4,6 +4,7 @@ import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import child_process, { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { renderSummary, renderSummaryDiff } from './diff-snippet.js';
 import parser from './parser.js';
 
 const exec = promisify(child_process.exec);
@@ -23,8 +24,8 @@ let initializeParams;
 let workDir;
 let navigatorThreadId = '';
 let explorerThreadId = '';
-let activeParentItem;
 let lists = [];
+let prevGoalItem;
 
 let appBuf = Buffer.alloc(0);
 appServer.stdout.on('data', (chunk) => {
@@ -82,7 +83,7 @@ appServer.stdout.on('data', (chunk) => {
   }
 });
 
-async function startNewSession() {
+async function startNewSession(goalItem) {
   workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
   const shoakuId = basename(workDir);
 
@@ -153,15 +154,15 @@ async function startNewSession() {
     })
   ]);
 
-  const childItem = findActiveItem(activeParentItem?.children ?? []);
-  logWarn(`Parent item: ${activeParentItem?.content}, child item: ${childItem?.content}`)
+  const childItem = findActiveItem(goalItem?.children ?? []);
+  logWarn(`Parent item: ${goalItem?.content}, child item: ${childItem?.content}`)
 
   const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
   const lines = content.split('\n');
-  lines[activeParentItem.line] =
-    lines[activeParentItem.line].slice(0, activeParentItem.labelPosition.start)
+  lines[goalItem.line] =
+    lines[goalItem.line].slice(0, goalItem.labelPosition.start)
     + `[${shoakuId}]`
-    + lines[activeParentItem.line].slice(activeParentItem.labelPosition.end);
+    + lines[goalItem.line].slice(goalItem.labelPosition.end);
   await writeFile(initializeParams.initializationOptions.filePath, lines.join('\n'), { encoding: 'utf8' });
   const sessionDir = join(sessionsDir, shoakuId);
   await mkdir(sessionDir, { recursive: true });
@@ -180,7 +181,7 @@ async function startNewSession() {
     input: [
       {
         type: "text",
-        text: `My goal is ${activeParentItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
+        text: `My goal is ${goalItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
       }
     ]}, {
       onItemCompleted: async (id, params) => {
@@ -197,7 +198,6 @@ async function startNewSession() {
 
 async function resumeSession(shoakuId) {
   const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
-  logWarn(`metaData: ${JSON.stringify(metaData)}`);
   if (!metaData.navigatorSessionId || !metaData.explorerSessionId) {
     logWarn(`Invalid session metadata for shoakuId ${shoakuId}`);
     return;
@@ -284,6 +284,7 @@ todo_path:
 
         initializeParams = message.params;
         syncShoakuLists(initializeParams.initializationOptions.filePath);
+        prevGoalItem = findActiveParentItem(lists);
 
         appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
           clientInfo: {
@@ -309,33 +310,49 @@ todo_path:
           try {
             for await (const event of watch(initializeParams.initializationOptions.filePath)) {
               const lists = await syncShoakuLists(initializeParams.initializationOptions.filePath);
-              activeParentItem = findActiveParentItem(lists);
-              if (activeParentItem && activeParentItem.shoakuId == null) {
-                logWarn('Start new session');
-                await startNewSession();
-              }
 
-              for (const item of lists) {
-                if (item.type === activeParentItem?.type && item.content === activeParentItem?.content && item.checked) {
+              if (prevGoalItem?.checked === false && prevGoalItem.shoakuId) {
+                const currentGoalItem = findItemByShoakuId(lists, prevGoalItem.shoakuId);
+                if (currentGoalItem && currentGoalItem.shoakuId == null) {
+                  logWarn('Start new session');
+                  await startNewSession(currentGoalItem);
+                }
+
+                if (currentGoalItem && currentGoalItem.shoakuId === prevGoalItem?.shoakuId && currentGoalItem.checked && !prevGoalItem.checked) {
+                  const sessionId = shoakuToSession.get(currentGoalItem.shoakuId);
+                  if (!sessionId) {
+                    logError(`No active session found for shoakuId ${currentGoalItem.shoakuId}`);
+                    return;
+                  }
+
                   await startTurn({
-                    threadId: navigatorThreadId,
+                    threadId: sessionId,
                     input: [
                       {
                         type: "text",
-                        text: `Regarding ${activeParentItem?.content}, summarize only the conversations that will be useful in the future, listing them as bullet points.`
+                        text: `Regarding ${currentGoalItem?.content}, summarize only the conversations that will be useful in the future, listing them as bullet points.`
                       }
                     ]}, {
                       onItemCompleted: async (id, params) => {
+                        const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+                        const shoakuId = sessionToShoaku.get(params.threadId);
+                        const diff = renderSummaryDiff(content, shoakuId, params.item.text, { unified: 2 });
                         process.stdout.write(
                           buildNotification("shoaku/showDiff", {
-                            response: params.item.text
+                            shoakuId,
+                            response: params.item.text,
+                            diff
                           })
                         );
                       }
                     }
                   );
-                  break;
                 }
+              }
+
+              const activeGoalItem = findActiveParentItem(lists);
+              if (activeGoalItem) {
+                prevGoalItem = activeGoalItem;
               }
             }
           } catch (err) {
@@ -374,6 +391,12 @@ todo_path:
         if (message.params.shoakuId) {
           resumeSession(message.params.shoakuId);
         }
+        break;
+
+      case 'shoaku/applyDiff':
+        const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+        const updatedContent = renderSummary(content, message.params.shoakuId, message.params.response);
+        await writeFile(initializeParams.initializationOptions.filePath, updatedContent, { encoding: 'utf8' });
         break;
 
       case 'shoaku/reply':

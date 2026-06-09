@@ -7,6 +7,9 @@ interface AppLanguageServer : LanguageServer {
     @JsonNotification("shoaku/startSession")
     fun startSession(params: StartSessionParams)
 
+    @JsonNotification("shoaku/applyDiff")
+    fun applyDiff(params: ApplyDiffParams)
+
     @JsonNotification("shoaku/reply")
     fun reply(params: ReplyParams)
 }
@@ -18,4 +21,9 @@ data class StartSessionParams(
 data class ReplyParams(
     val shoakuId: String,
     val text: String
+)
+
+data class ApplyDiffParams(
+    val shoakuId: String,
+    val response: String
 )

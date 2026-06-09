@@ -56,6 +56,7 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
         fun showDiff(params: ShoakuShowDiffParams) {
             project.service<ShoakuSettings>().viewModel.apply {
                 if (params.response.isNotBlank()) {
+                    diffResponses[params.shoakuId] = params
                 }
             }
         }
@@ -77,6 +78,7 @@ data class Item(
 )
 
 data class ShoakuShowDiffParams(
-    val originalText: String? = null,
-    val response: String
+    val shoakuId: String,
+    val response: String,
+    val diff: String
 )

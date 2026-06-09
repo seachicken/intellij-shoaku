@@ -1,6 +1,7 @@
 package shoaku
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.intellij.openapi.components.*
@@ -24,4 +25,5 @@ class ShoakuSettings : PersistentStateComponent<ShoakuSettings.State> {
 
 class ShoakuViewModel {
     var items by mutableStateOf<List<Item>>(emptyList())
+    val diffResponses = mutableStateMapOf<String, ShoakuShowDiffParams>()
 }
