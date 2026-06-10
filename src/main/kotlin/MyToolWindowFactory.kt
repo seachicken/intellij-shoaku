@@ -14,6 +14,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -31,7 +32,6 @@ import com.intellij.ui.JBColor
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
-import org.jetbrains.jewel.ui.component.styling.LocalDefaultTabStyle
 
 class MyToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
@@ -78,7 +78,7 @@ private fun MyToolWindowContent(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        SessionTabStrip(
+        SessionHeaderSwitcher(
             openSessions = openSessions,
             selectedSessionKey = selectedSessionKey,
             onSelectSessions = { selectedSessionKey = null },
@@ -128,42 +128,108 @@ private fun MyToolWindowContent(
 }
 
 @Composable
-private fun SessionTabStrip(
+private fun SessionHeaderSwitcher(
     openSessions: List<Item>,
     selectedSessionKey: SessionKey?,
     onSelectSessions: () -> Unit,
     onSelectSession: (SessionKey) -> Unit,
     onCloseSession: (SessionKey) -> Unit
 ) {
-    val tabs = buildList {
-        add(
-            TabData.Default(
-                selected = selectedSessionKey == null,
-                content = { Text("Sessions") },
-                closable = false,
-                onClose = {},
-                onClick = onSelectSessions
-            )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        SessionHeaderItem(
+            title = "Sessions",
+            selected = selectedSessionKey == null,
+            onClick = onSelectSessions
         )
         openSessions.forEach { session ->
             val key = session.sessionKey
-            add(
-                TabData.Default(
-                    selected = selectedSessionKey == key,
-                    content = { Text(session.content) },
-                    closable = true,
-                    onClose = { onCloseSession(key) },
-                    onClick = { onSelectSession(key) }
-                )
+            SessionHeaderItem(
+                title = session.content,
+                selected = selectedSessionKey == key,
+                onClick = { onSelectSession(key) },
+                onClose = { onCloseSession(key) }
             )
         }
     }
+}
 
-    TabStrip(
-        tabs = tabs,
-        style = LocalDefaultTabStyle.current,
-        modifier = Modifier.fillMaxWidth()
-    )
+@Composable
+private fun SessionHeaderItem(
+    title: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onClose: (() -> Unit)? = null
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val closeInteractionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val closeHovered by closeInteractionSource.collectIsHoveredAsState()
+    val colors = SessionHeaderColors.item(selected = selected, hovered = hovered)
+    val shape = RoundedCornerShape(SessionHeaderMetrics.cornerRadius)
+
+    Row(
+        modifier = Modifier
+            .clip(shape)
+            .background(colors.background, shape)
+            .border(
+                width = if (selected) 1.dp else 0.dp,
+                color = colors.border,
+                shape = shape
+            )
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .padding(
+                horizontal = SessionHeaderMetrics.horizontalPadding,
+                vertical = SessionHeaderMetrics.verticalPadding
+            ),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            color = colors.content,
+            fontSize = 12.sp,
+            maxLines = 1
+        )
+        if (onClose != null) {
+            Box(
+                modifier = Modifier
+                    .size(16.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(
+                        SessionHeaderColors.closeBackground(
+                            visible = selected || hovered || closeHovered,
+                            hovered = closeHovered
+                        ),
+                        RoundedCornerShape(4.dp)
+                    )
+                    .hoverable(closeInteractionSource)
+                    .clickable(
+                        interactionSource = closeInteractionSource,
+                        indication = null,
+                        onClick = onClose
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "\u00d7",
+                    color = SessionHeaderColors.closeContent(selected || hovered || closeHovered),
+                    fontSize = 11.sp
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -512,6 +578,55 @@ private data class TodoCardColors(
     val background: Color,
     val border: Color
 )
+
+private data class HeaderItemColors(
+    val background: Color,
+    val border: Color,
+    val content: Color
+)
+
+private object SessionHeaderMetrics {
+    val cornerRadius = 8.dp
+    val horizontalPadding = 10.dp
+    val verticalPadding = 6.dp
+}
+
+private object SessionHeaderColors {
+    private val panelBackground = namedColor("Panel.background", 0xFF1F2329, 0xFFF7F8FA)
+    private val hoverBackground = namedColor("List.hoverBackground", 0xFF2F3540, 0xFFEFF3F8)
+    private val selectionBackground = namedColor("TabbedPane.focusColor", 0xFF2B313C, 0xFFE8EEF7)
+    private val border = namedColor("Component.borderColor", 0xFF4B5263, 0xFFC5CDD8)
+    private val content = namedColor("Label.foreground", 0xFFE6EDF3, 0xFF1F2328)
+    private val secondaryContent = namedColor("Label.infoForeground", 0xFF9DA7B3, 0xFF667281)
+
+    fun item(selected: Boolean, hovered: Boolean): HeaderItemColors =
+        when {
+            selected -> HeaderItemColors(
+                background = overlay(selectionBackground.copy(alpha = 0.38f), panelBackground),
+                border = border.copy(alpha = 0.95f),
+                content = content
+            )
+            hovered -> HeaderItemColors(
+                background = overlay(hoverBackground.copy(alpha = 0.32f), panelBackground),
+                border = Color.Transparent,
+                content = content
+            )
+            else -> HeaderItemColors(
+                background = Color.Transparent,
+                border = Color.Transparent,
+                content = secondaryContent
+            )
+        }
+
+    fun closeBackground(visible: Boolean, hovered: Boolean): Color =
+        when {
+            hovered -> overlay(border.copy(alpha = 0.32f), panelBackground)
+            visible -> overlay(border.copy(alpha = 0.18f), panelBackground)
+            else -> Color.Transparent
+        }
+
+    fun closeContent(visible: Boolean): Color = if (visible) content else secondaryContent.copy(alpha = 0.75f)
+}
 
 private object TodoMetrics {
     val cardCornerRadius = 16.dp
