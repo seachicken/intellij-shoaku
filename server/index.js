@@ -310,14 +310,15 @@ todo_path:
           try {
             for await (const event of watch(initializeParams.initializationOptions.filePath)) {
               const lists = await syncShoakuLists(initializeParams.initializationOptions.filePath);
+              for (const item of lists) {
+                if (item.checked === false && !item.shoakuId) {
+                  logWarn('Start new session');
+                  await startNewSession(item);
+                }
+              }
 
               if (prevGoalItem?.checked === false && prevGoalItem.shoakuId) {
                 const currentGoalItem = findItemByShoakuId(lists, prevGoalItem.shoakuId);
-                if (currentGoalItem && currentGoalItem.shoakuId == null) {
-                  logWarn('Start new session');
-                  await startNewSession(currentGoalItem);
-                }
-
                 if (currentGoalItem && currentGoalItem.shoakuId === prevGoalItem?.shoakuId && currentGoalItem.checked && !prevGoalItem.checked) {
                   const sessionId = shoakuToSession.get(currentGoalItem.shoakuId);
                   if (!sessionId) {
