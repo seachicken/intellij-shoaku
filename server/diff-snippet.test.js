@@ -39,6 +39,17 @@ test('insert multi-line summary', (t) => {
 `.trimStart());
 });
 
+test('insert with tab indent', (t) => {
+  assert.deepStrictEqual(renderSummary(`
+- a [shoaku-aA1234]
+	- b
+`.trimStart(), 'shoaku-aA1234', '- summary'), `
+- a [shoaku-aA1234]
+	- b
+	- summary
+`.trimStart());
+});
+
 test('insert summary with unified lines', (t) => {
   assert.deepStrictEqual(renderSummaryDiff(`
 - 0

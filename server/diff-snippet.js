@@ -5,6 +5,7 @@ export function renderSummary(content, shoakuId, summary) {
 export function renderSummaryDiff(content, shoakuId, summary, { operator = '+', unified = 3 } = {}) {
   let lineNumber = -1;
   let parentIndent = -1;
+  let indentChar = ' ';
   let insertLine = -1;
   let insertIndent = Number.MAX_VALUE;
 
@@ -17,6 +18,7 @@ export function renderSummaryDiff(content, shoakuId, summary, { operator = '+', 
     if (parentIndent >= 0) {
       const indent = countIndent(line);
       if (indent > parentIndent && indent < insertIndent) {
+        indentChar = line[0] ?? ' ';
         insertIndent = indent;
       }
       if (indent <= parentIndent) {
@@ -40,7 +42,7 @@ export function renderSummaryDiff(content, shoakuId, summary, { operator = '+', 
     insertIndent = parentIndent + 2;
   }
 
-  const summaryLines = summary.split('\n').map(line => `${operator}${' '.repeat(insertIndent)}${line}`);
+  const summaryLines = summary.split('\n').map(line => `${operator}${indentChar.repeat(insertIndent)}${line}`);
   lines.splice(insertLine + 1, 0, ...summaryLines);
 
   if (unified == null) {
