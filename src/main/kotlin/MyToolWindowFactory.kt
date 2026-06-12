@@ -323,7 +323,7 @@ private fun SessionDetailContent(
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items(session.children) { model ->
+            items(session.children.filter { it.checked != null }) { model ->
                 TodoRow(
                     title = model.content,
                     subtitle = null,
@@ -566,14 +566,6 @@ private fun InfoCard(
     }
 }
 
-private fun sessionBadgeText(session: Item, activeChild: Item?): String =
-    when {
-        session.checked == true -> "Done"
-        !activeChild?.status.isNullOrBlank() -> activeChild?.status ?: "Open"
-        session.children.any { it.checked == false } -> "Active"
-        else -> "Open"
-    }
-
 private data class TodoCardColors(
     val background: Color,
     val border: Color
@@ -638,7 +630,6 @@ private object TodoMetrics {
 private object TodoColors {
     private val panelBackground = namedColor("Panel.background", 0xFF1F2329, 0xFFF7F8FA)
     private val listBackground = namedColor("List.background", 0xFF262B33, 0xFFFFFFFF)
-    private val separator = namedColor("Separator.foreground", 0xFF3B4252, 0xFFD8DEE9)
     private val componentBorder = namedColor("Component.borderColor", 0xFF4B5263, 0xFFC5CDD8)
     private val hoverBackground = namedColor("List.hoverBackground", 0xFF2D4366, 0xFFEAF2FF)
     private val infoBackground = namedColor("Component.infoBackground", 0xFF24324A, 0xFFF3F7FF)
