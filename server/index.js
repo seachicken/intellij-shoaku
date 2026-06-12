@@ -21,10 +21,8 @@ const sessionToShoaku = new Map();
 const shoakuToSession = new Map();
 
 let initializeParams;
-let workDir;
-let navigatorThreadId = '';
-let explorerThreadId = '';
 let lists = [];
+let activeGoalItem;
 let prevGoalItem;
 
 let appBuf = Buffer.alloc(0);
@@ -43,14 +41,14 @@ appServer.stdout.on('data', (chunk) => {
       logError(`Received non-JSON message from app server: ${line}`);
       continue;
     }
-    const logPrefix = message.params?.threadId === navigatorThreadId ? '[navigator] ' : message.params?.threadId === explorerThreadId ? '[explorer] ' : '';
+    const logPrefix = sessionToShoaku.has(message.params?.threadId) ? '[navigator] ' : message.params?.threadId ? '[explorer] ' : '';
     logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
 
     if (message.id != null && pendingRequests.has(message.id)) {
       const { resolve, reject } = pendingRequests.get(message.id);
       pendingRequests.delete(message.id);
       if (message.error) {
-        reject(message.error);
+        reject(new Error(JSON.stringify(message.error)));
       } else {
         resolve(message);
       }
@@ -84,7 +82,7 @@ appServer.stdout.on('data', (chunk) => {
 });
 
 async function startNewSession(goalItem) {
-  workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
+  const workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
   const shoakuId = basename(workDir);
 
   const [navigatorRes, explorerRes] = await Promise.all([
@@ -103,8 +101,8 @@ async function startNewSession(goalItem) {
       })
     })()
   ]);
-  navigatorThreadId = navigatorRes.result.thread.id;
-  explorerThreadId = explorerRes.result.thread.id;
+  const navigatorThreadId = navigatorRes.result.thread.id;
+  const explorerThreadId = explorerRes.result.thread.id;
   sessionToShoaku.set(navigatorThreadId, shoakuId);
   shoakuToSession.set(shoakuId, navigatorThreadId);
 
@@ -211,8 +209,7 @@ async function resumeSession(shoakuId) {
       threadId: metaData.explorerSessionId
     })
   ]);
-  navigatorThreadId = navigatorRes.result.thread.id;
-  explorerThreadId = explorerRes.result.thread.id;
+  const navigatorThreadId = navigatorRes.result.thread.id;
   sessionToShoaku.set(navigatorThreadId, shoakuId);
   shoakuToSession.set(shoakuId, navigatorThreadId);
 }
@@ -244,72 +241,75 @@ appServer.stderr.on('data', (chunk) => {
 
 let buf = Buffer.alloc(0);
 process.stdin.on('data', async (chunk) => {
-  buf = Buffer.concat([buf, chunk]);
+  try {
+    buf = Buffer.concat([buf, chunk]);
 
-  while (true) {
-    const headerEnd = buf.indexOf(Buffer.from('\r\n\r\n'));
-    if (headerEnd === -1) break;
+    while (true) {
+      const headerEnd = buf.indexOf(Buffer.from('\r\n\r\n'));
+      if (headerEnd === -1) break;
 
-    const header = buf.slice(0, headerEnd).toString('ascii');
-    // Read "Content-Length: ..." header to determine body length
-    const contentLength = parseInt(header.substring(16))
-    const bodyStart = headerEnd + 4;
-    if (buf.length < bodyStart + contentLength) break;
+      const header = buf.slice(0, headerEnd).toString('ascii');
+      // Read "Content-Length: ..." header to determine body length
+      const contentLength = parseInt(header.substring(16))
+      const bodyStart = headerEnd + 4;
+      if (buf.length < bodyStart + contentLength) break;
 
-    const body = buf.slice(bodyStart, bodyStart + contentLength).toString('utf-8');
-    buf = buf.slice(bodyStart + contentLength);
+      const body = buf.slice(bodyStart, bodyStart + contentLength).toString('utf-8');
+      buf = buf.slice(bodyStart + contentLength);
 
-    let message;
-    try {
-      message = JSON.parse(body);
-    } catch {
-      logError(`Received non-JSON message from language client: ${body}`);
-      continue;
-    }
-    logInfo(`LC-> ${JSON.stringify(message)}`)
+      let message;
+      try {
+        message = JSON.parse(body);
+      } catch {
+        logError(`Received non-JSON message from language client: ${body}`);
+        continue;
+      }
+      logInfo(`LC-> ${JSON.stringify(message)}`)
 
-    switch (message.method) {
-      case 'initialize':
-        await mkdir(shoakuDir, { recursive: true });
-        await mkdir(sessionsDir, { recursive: true });
-        const data = `
----
-todo_path: 
-`.trimStart();
-        await writeFile(join(shoakuDir, 'config.yaml'), data, { flag: "wx" }).catch((e) => {
-          if (e.code !== 'EEXIST') {
-            throw e;
-          }
-        });
-
-        initializeParams = message.params;
-        syncShoakuLists(initializeParams.initializationOptions.filePath);
-        prevGoalItem = findActiveParentItem(lists);
-
-        appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
-          clientInfo: {
-            name: "shoaku_intellij",
-            title: "Shoaku for IntelliJ",
-            version: "0.1.0"
-          },
-          capabilities: {
-            optOutNotificationMethods: ['item/agentMessage/delta']
-          }
-        })) + '\n');
-
-        process.stdout.write(buildResponse(message.id, {
-          capabilities: {
-            textDocumentSync: {
-              change: 2,
-              save: true
+      switch (message.method) {
+        case 'initialize':
+          await mkdir(shoakuDir, { recursive: true });
+          await mkdir(sessionsDir, { recursive: true });
+          const data = `
+--  -
+to  do_path: 
+`.  trimStart();
+          await writeFile(join(shoakuDir, 'config.yaml'), data, { flag: "wx" }).catch((e) => {
+            if (e.code !== 'EEXIST') {
+              throw e;
             }
-          }
-        }));
+          });
 
-        (async () => {
+          initializeParams = message.params;
+          const lists = await syncShoakuLists(initializeParams.initializationOptions.filePath);
+          activeGoalItem = findActiveParentItem(lists);
+          logWarn(`Initialization, active goal item: ${JSON.stringify(activeGoalItem)}`);
+
+          appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
+            clientInfo: {
+              name: "shoaku_intellij",
+              title: "Shoaku for IntelliJ",
+              version: "0.1.0"
+            },
+            capabilities: {
+              optOutNotificationMethods: ['item/agentMessage/delta']
+            }
+          })) + '\n');
+
+          process.stdout.write(buildResponse(message.id, {
+            capabilities: {
+              textDocumentSync: {
+                change: 2,
+                save: true
+              }
+            }
+          }));
+
           try {
             for await (const event of watch(initializeParams.initializationOptions.filePath)) {
               const lists = await syncShoakuLists(initializeParams.initializationOptions.filePath);
+              activeGoalItem = findActiveParentItem(lists);
+
               for (const item of lists) {
                 if (item.checked === false && !item.shoakuId) {
                   logWarn('Start new session');
@@ -351,7 +351,6 @@ todo_path:
                 }
               }
 
-              const activeGoalItem = findActiveParentItem(lists);
               if (activeGoalItem) {
                 prevGoalItem = activeGoalItem;
               }
@@ -359,19 +358,20 @@ todo_path:
           } catch (err) {
             logError(`Error watching file: ${err.message}`);
           }
-        })();
-        break;
+          break;
 
-      case 'shutdown':
-        spawn('git', ['-C', initializeParams.rootPath, 'worktree', 'remove', workDir]);
-        workDir = null;
-        process.stdout.write(buildResponse(message.id, null));
-        break;
+        case 'shutdown':
+          process.stdout.write(buildResponse(message.id, null));
+          break;
 
-      case 'textDocument/didSave':
-        if (navigatorThreadId) {
+        case 'textDocument/didSave':
+          if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
+            logWarn(`No active goal item with shoakuId found, skipping didSave event processing. item: ${JSON.stringify(activeGoalItem)}`);
+            break;
+          }
+
           sendAppRequest('thread/inject_items', {
-            threadId: navigatorThreadId,
+            threadId: shoakuToSession.get(activeGoalItem.shoakuId),
             items: [
               {
                 type: 'message',
@@ -385,48 +385,49 @@ todo_path:
               }
             ],
           });
-        }
-        break;
-
-      case 'shoaku/startSession':
-        if (message.params.shoakuId) {
-          resumeSession(message.params.shoakuId);
-        }
-        break;
-
-      case 'shoaku/applyDiff':
-        const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
-        const updatedContent = renderSummary(content, message.params.shoakuId, message.params.response);
-        await writeFile(initializeParams.initializationOptions.filePath, updatedContent, { encoding: 'utf8' });
-        break;
-
-      case 'shoaku/reply':
-        const sessionId = shoakuToSession.get(message.params.shoakuId);
-        if (!sessionId) {
-          logWarn(`No active session found for shoakuId ${message.params.shoakuId}`);
           break;
-        }
 
-        await startTurn({
-          threadId: sessionId,
-          input: [
-            {
-              type: 'text',
-              text: message.params.text
-            }
-          ]}, {
-            onItemCompleted: async (id, params) => {
-              findItemByShoakuId(lists, sessionToShoaku.get(params.threadId)).response = params.item.text;
-              process.stdout.write(
-                buildNotification("shoaku/notification", {
-                  lists
-                })
-              );
-            }
+        case 'shoaku/startSession':
+          if (message.params.shoakuId) {
+            resumeSession(message.params.shoakuId);
           }
-        );
-        break;
+          break;
+
+        case 'shoaku/applyDiff':
+          const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+          const updatedContent = renderSummary(content, message.params.shoakuId, message.params.response);
+          await writeFile(initializeParams.initializationOptions.filePath, updatedContent, { encoding: 'utf8' });
+          break;
+
+        case 'shoaku/reply':
+          const sessionId = shoakuToSession.get(message.params.shoakuId);
+          if (!sessionId) {
+            logWarn(`No active session found for shoakuId ${message.params.shoakuId}`);
+            break;
+          }
+
+          await startTurn({
+            threadId: sessionId,
+            input: [
+              {
+                type: 'text',
+                text: message.params.text
+              }
+            ]}, {
+              onItemCompleted: (id, params) => {
+                process.stdout.write(
+                  buildNotification("shoaku/notification", {
+                    lists
+                  })
+                );
+              }
+            }
+          );
+          break;
+      }
     }
+  } catch (err) {
+    logError(`Error processing message from language client: ${err.message}`);
   }
 });
 
@@ -479,7 +480,7 @@ const pendingTurns = new Map();
 async function startTurn(params, callbacks) {
   for (const turnId of pendingTurns.keys()) {
     await sendAppRequest('turn/interrupt', {
-      threadId: navigatorThreadId,
+      threadId: params.threadId,
       turnId
     });
   }

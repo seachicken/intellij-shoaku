@@ -144,7 +144,7 @@ private fun SessionHeaderSwitcher(
         verticalAlignment = Alignment.CenterVertically
     ) {
         SessionHeaderItem(
-            title = "Sessions",
+            title = "Goals",
             selected = selectedSessionKey == null,
             onClick = onSelectSessions
         )
@@ -271,7 +271,7 @@ private fun SessionListContent(
                 modifier = modifier,
                 contentAlignment = Alignment.Center
             ) {
-                Text("No sessions")
+                Text("No goals")
             }
             return
         }
