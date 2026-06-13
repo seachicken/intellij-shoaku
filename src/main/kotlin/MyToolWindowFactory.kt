@@ -28,12 +28,12 @@ import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
-import com.intellij.platform.compose.JBComposePanel
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import org.jetbrains.compose.ui.tooling.preview.Preview
+import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
 import java.awt.Dimension
@@ -392,22 +392,27 @@ private fun SessionDetailSplitter(
     val splitter = remember {
         OnePixelSplitter(true, todoPaneFraction, 0.1f, 0.9f).apply {
             dividerWidth = JBUI.scale(3)
+            divider.background = java.awt.Color(0, 0, 0, 0)
             setHonorComponentsMinimumSize(true)
-            setShowDividerControls(false)
-            setShowDividerIcon(false)
-            firstComponent = JBComposePanel {
-                SessionTodoPane(
-                    session = sessionState.value,
-                    diffResponse = diffResponseState.value,
-                    filePath = filePathState.value,
-                    viewModel = viewModelState.value,
-                    project = projectState.value
-                )
+            isShowDividerControls = false
+            isShowDividerIcon = false
+            firstComponent = JewelComposePanel {
+                Box(Modifier.fillMaxSize().padding(bottom = 2.dp)) {
+                    SessionTodoPane(
+                        session = sessionState.value,
+                        diffResponse = diffResponseState.value,
+                        filePath = filePathState.value,
+                        viewModel = viewModelState.value,
+                        project = projectState.value
+                    )
+                }
             }.apply {
                 minimumSize = Dimension(0, JBUI.scale(120))
             }
-            secondComponent = JBComposePanel {
-                SessionChatPane(session = sessionState.value)
+            secondComponent = JewelComposePanel {
+                Box(Modifier.fillMaxSize().padding(top = 2.dp)) {
+                    SessionChatPane(session = sessionState.value)
+                }
             }.apply {
                 minimumSize = Dimension(0, JBUI.scale(220))
             }
@@ -534,19 +539,17 @@ private fun SessionSectionCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val shape = RoundedCornerShape(TodoMetrics.cardCornerRadius)
     Column(
         modifier = modifier
-            .border(1.dp, TodoColors.sectionBorder, shape)
-            .background(TodoColors.sectionSurface, shape)
+            .background(TodoColors.sectionSurface, RoundedCornerShape(8.dp))
             .padding(TodoMetrics.horizontalPadding),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             text = title,
             fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = TodoColors.secondaryText
+            fontWeight = FontWeight.SemiBold,
+            color = TodoColors.primaryText
         )
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -597,7 +600,7 @@ private fun ChatEntryRow(entry: Message) {
 
 @Composable
 private fun ChatActivityRow(entry: Message) {
-    val operation = entry.command ?: return
+    val command = entry.command ?: return
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Start
@@ -611,13 +614,13 @@ private fun ChatActivityRow(entry: Message) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "operation",
+                text = "Ran:",
                 fontSize = 10.sp,
                 color = TodoColors.activityLabelText,
                 fontWeight = FontWeight.Medium
             )
             Text(
-                text = operation,
+                text = command,
                 fontSize = 11.sp,
                 color = TodoColors.secondaryText
             )
