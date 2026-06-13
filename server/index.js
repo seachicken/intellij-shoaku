@@ -19,6 +19,7 @@ const shoakuDir = join(homedir(), '.shoaku');
 const sessionsDir = join(shoakuDir, 'sessions');
 const sessionToShoaku = new Map();
 const shoakuToSession = new Map();
+const chatByShoakuId = new Map();
 
 let initializeParams;
 let lists = [];
@@ -62,7 +63,7 @@ appServer.stdout.on('data', (chunk) => {
 
     if (message.params?.turnId != null && pendingTurns.has(message.params.turnId)) {
       const { id, callbacks } = pendingTurns.get(message.params.turnId);
-      if (message.method === 'item/completed' && message.params.item.type === 'agentMessage') {
+      if (message.method === 'item/completed') {
         callbacks?.onItemCompleted(id, message.params)
       }
     }
@@ -84,6 +85,7 @@ appServer.stdout.on('data', (chunk) => {
 async function startNewSession(goalItem) {
   const workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
   const shoakuId = basename(workDir);
+  chatByShoakuId.set(shoakuId, []);
 
   const [navigatorRes, explorerRes] = await Promise.all([
     sendAppRequest('thread/start', {
@@ -182,19 +184,26 @@ async function startNewSession(goalItem) {
         text: `My goal is ${goalItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
       }
     ]}, {
-      onItemCompleted: async (id, params) => {
-        findItemByShoakuId(lists, sessionToShoaku.get(params.threadId)).response = params.item.text;
-        process.stdout.write(
-          buildNotification("shoaku/notification", {
-            lists
-          })
-        );
+      onItemCompleted: (id, params) => {
+        if (params.item.type !== 'agentMessage') {
+          return;
+        }
+
+        chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.push({
+          turnId: params.turnId,
+          type: params.item.type,
+          text: params.item.text ||
+            params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
+          command: params.item.command
+        });
+        syncShoakuLists(initializeParams.initializationOptions.filePath);
       }
     }
   );
 }
 
 async function resumeSession(shoakuId) {
+  chatByShoakuId.set(shoakuId, []);
   const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
   if (!metaData.navigatorSessionId || !metaData.explorerSessionId) {
     logWarn(`Invalid session metadata for shoakuId ${shoakuId}`);
@@ -217,6 +226,11 @@ async function resumeSession(shoakuId) {
 async function syncShoakuLists(filePath) {
   const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
   lists = parser.parse(content);
+  for (const goal of lists) {
+    if (goal.shoakuId) {
+      goal.messages = chatByShoakuId.get(goal.shoakuId) ?? [];
+    }
+  }
   process.stdout.write(
     buildNotification("shoaku/notification", {
       lists
@@ -281,7 +295,7 @@ to  do_path:
           });
 
           initializeParams = message.params;
-          const lists = await syncShoakuLists(initializeParams.initializationOptions.filePath);
+          await syncShoakuLists(initializeParams.initializationOptions.filePath);
           activeGoalItem = findActiveParentItem(lists);
           logWarn(`Initialization, active goal item: ${JSON.stringify(activeGoalItem)}`);
 
@@ -307,7 +321,7 @@ to  do_path:
 
           try {
             for await (const event of watch(initializeParams.initializationOptions.filePath)) {
-              const lists = await syncShoakuLists(initializeParams.initializationOptions.filePath);
+              await syncShoakuLists(initializeParams.initializationOptions.filePath);
               activeGoalItem = findActiveParentItem(lists);
 
               for (const item of lists) {
@@ -335,6 +349,10 @@ to  do_path:
                       }
                     ]}, {
                       onItemCompleted: async (id, params) => {
+                        if (params.item.type !== 'agentMessage') {
+                          return;
+                        }
+
                         const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
                         const shoakuId = sessionToShoaku.get(params.threadId);
                         const diff = renderSummaryDiff(content, shoakuId, params.item.text, { unified: 2 });
@@ -415,11 +433,14 @@ to  do_path:
               }
             ]}, {
               onItemCompleted: (id, params) => {
-                process.stdout.write(
-                  buildNotification("shoaku/notification", {
-                    lists
-                  })
-                );
+                chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.push({
+                  turnId: params.turnId,
+                  type: params.item.type,
+                  text: params.item.text ||
+                    params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
+                  command: params.item.command
+                });
+                syncShoakuLists(initializeParams.initializationOptions.filePath);
               }
             }
           );

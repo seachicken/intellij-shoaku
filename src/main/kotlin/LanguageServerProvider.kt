@@ -74,7 +74,13 @@ data class Item(
     var status: String = "",
     val children: List<Item> = emptyList(),
     val shoakuId: String? = null,
-    val response: String? = null
+    val messages: List<Message>? = emptyList()
+)
+
+data class Message(
+    val type: String,
+    val text: String? = null,
+    val command: String? = null
 )
 
 data class ShoakuShowDiffParams(

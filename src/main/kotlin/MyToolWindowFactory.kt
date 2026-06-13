@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -17,21 +18,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.platform.compose.JBComposePanel
 import com.intellij.platform.lsp.api.LspServerManager
+import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.JBColor
+import com.intellij.util.ui.JBUI
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
+import java.awt.Dimension
+import java.beans.PropertyChangeListener
+import kotlin.math.abs
 
 class MyToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
@@ -62,6 +69,7 @@ private fun MyToolWindowContent(
     val vm = remember { viewModel }
     val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
     var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
+    var detailTodoPaneFraction by remember { mutableStateOf(0.45f) }
     val sessions = vm.items.filter { it.shoakuId != null }
     val openSessions = openSessionKeys.mapNotNull { key -> sessions.firstOrNull { it.sessionKey == key } }
     val selectedSession = selectedSessionKey?.let { key -> sessions.firstOrNull { it.sessionKey == key } }
@@ -117,6 +125,8 @@ private fun MyToolWindowContent(
                 filePath = state.filePath,
                 viewModel = vm,
                 project = project,
+                todoPaneFraction = detailTodoPaneFraction,
+                onTodoPaneFractionChange = { detailTodoPaneFraction = it },
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
             )
         }
@@ -301,112 +311,27 @@ private fun SessionDetailContent(
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project? = null,
+    todoPaneFraction: Float,
+    onTodoPaneFractionChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val instructionState = rememberTextFieldState()
-    val responseScrollState = rememberScrollState()
     val diffResponse = session.shoakuId?.let { viewModel.diffResponses[it] }
 
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Text(
-            text = session.content,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold
+        SessionDetailSplitter(
+            session = session,
+            diffResponse = diffResponse,
+            filePath = filePath,
+            viewModel = viewModel,
+            project = project,
+            todoPaneFraction = todoPaneFraction,
+            onTodoPaneFractionChange = onTodoPaneFractionChange,
+            modifier = Modifier.weight(1f).fillMaxWidth()
         )
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        LazyColumn(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            items(session.children.filter { it.checked != null }) { model ->
-                TodoRow(
-                    title = model.content,
-                    subtitle = null,
-                    meta = null,
-                    completed = model.checked ?: false,
-                    compact = true
-                )
-            }
-            if (diffResponse?.response?.isNotBlank() == true) {
-                item {
-                    InfoCard(
-                        title = "",
-                        modifier = Modifier.fillMaxWidth(),
-                        action = {
-                            OutlinedButton(
-                                onClick = {
-                                    project?.let {
-                                        LspServerManager.getInstance(project)
-                                            .getServersForProvider(LanguageServerProvider::class.java)
-                                            .first()
-                                            .sendNotification {
-                                                (it as AppLanguageServer).applyDiff(
-                                                    ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
-                                                )
-                                            }
-                                    }
-                                    session.shoakuId.let { shoakuId ->
-                                        viewModel.diffResponses.remove(shoakuId)
-                                    }
-                                },
-                                enabled = filePath.isNotBlank()
-                            ) {
-                                Text("Apply")
-                            }
-                        }
-                    ) {
-                        SelectionContainer {
-                            Text(diffResponse.diff, color = TodoColors.infoText)
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        if (session.response?.isNotBlank() == true) {
-            InfoCard(
-                title = "",
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 200.dp)
-                        .verticalScroll(responseScrollState)
-                ) {
-                    SelectionContainer {
-                        Text(session.response, color = TodoColors.infoText)
-                    }
-                }
-                if (responseScrollState.maxValue > 0 && responseScrollState.value < responseScrollState.maxValue) {
-                    Spacer(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(12.dp)
-                            .background(
-                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(Color.Transparent, TodoColors.infoSurface.copy(alpha = 0.82f))
-                                )
-                            )
-                    )
-                    Text(
-                        text = "Scroll for more",
-                        fontSize = 11.sp,
-                        color = TodoColors.secondaryText,
-                        textAlign = TextAlign.End,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-        }
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -444,6 +369,258 @@ private fun SessionDetailContent(
             ) {
                 Text("Send")
             }
+        }
+    }
+}
+
+@Composable
+private fun SessionDetailSplitter(
+    session: Item,
+    diffResponse: ShoakuShowDiffParams?,
+    filePath: String,
+    viewModel: ShoakuViewModel,
+    project: Project?,
+    todoPaneFraction: Float,
+    onTodoPaneFractionChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val sessionState = rememberUpdatedState(session)
+    val diffResponseState = rememberUpdatedState(diffResponse)
+    val filePathState = rememberUpdatedState(filePath)
+    val viewModelState = rememberUpdatedState(viewModel)
+    val projectState = rememberUpdatedState(project)
+    val splitter = remember {
+        OnePixelSplitter(true, todoPaneFraction, 0.1f, 0.9f).apply {
+            dividerWidth = JBUI.scale(3)
+            setHonorComponentsMinimumSize(true)
+            setShowDividerControls(false)
+            setShowDividerIcon(false)
+            firstComponent = JBComposePanel {
+                SessionTodoPane(
+                    session = sessionState.value,
+                    diffResponse = diffResponseState.value,
+                    filePath = filePathState.value,
+                    viewModel = viewModelState.value,
+                    project = projectState.value
+                )
+            }.apply {
+                minimumSize = Dimension(0, JBUI.scale(120))
+            }
+            secondComponent = JBComposePanel {
+                SessionChatPane(session = sessionState.value)
+            }.apply {
+                minimumSize = Dimension(0, JBUI.scale(220))
+            }
+        }
+    }
+
+    DisposableEffect(splitter, onTodoPaneFractionChange) {
+        val listener = PropertyChangeListener { event ->
+            if (event.propertyName == Splitter.PROP_PROPORTION) {
+                onTodoPaneFractionChange(splitter.proportion)
+            }
+        }
+        splitter.addPropertyChangeListener(listener)
+        onDispose {
+            splitter.removePropertyChangeListener(listener)
+        }
+    }
+
+    SideEffect {
+        if (abs(splitter.proportion - todoPaneFraction) > 0.001f) {
+            splitter.proportion = todoPaneFraction
+        }
+    }
+
+    SwingPanel(
+        factory = { splitter },
+        modifier = modifier,
+        update = {}
+    )
+}
+
+@Composable
+private fun SessionTodoPane(
+    session: Item,
+    diffResponse: ShoakuShowDiffParams?,
+    filePath: String,
+    viewModel: ShoakuViewModel,
+    project: Project?
+) {
+    SessionSectionCard(
+        title = "Tasks",
+        modifier = Modifier.fillMaxSize()
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(session.children.filter { it.checked != null }) { model ->
+                TodoRow(
+                    title = model.content,
+                    subtitle = null,
+                    meta = null,
+                    completed = model.checked ?: false,
+                    compact = true
+                )
+            }
+            if (diffResponse?.response?.isNotBlank() == true) {
+                item {
+                    InfoCard(
+                        title = "Suggested summary",
+                        modifier = Modifier.fillMaxWidth(),
+                        action = {
+                            OutlinedButton(
+                                onClick = {
+                                    project?.let {
+                                        LspServerManager.getInstance(project)
+                                            .getServersForProvider(LanguageServerProvider::class.java)
+                                            .first()
+                                            .sendNotification {
+                                                (it as AppLanguageServer).applyDiff(
+                                                    ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
+                                                )
+                                            }
+                                    }
+                                    session.shoakuId?.let { shoakuId ->
+                                        viewModel.diffResponses.remove(shoakuId)
+                                    }
+                                },
+                                enabled = filePath.isNotBlank()
+                            ) {
+                                Text("Apply")
+                            }
+                        }
+                    ) {
+                        SelectionContainer {
+                            Text(diffResponse.diff, color = TodoColors.infoText)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionChatPane(session: Item) {
+    SessionSectionCard(
+        title = "Chat",
+        modifier = Modifier.fillMaxSize()
+    ) {
+        if (session.messages?.isEmpty() ?: true) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("No messages yet", color = TodoColors.secondaryText)
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(session.messages) { entry ->
+                    ChatEntryRow(entry)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionSectionCard(
+    title: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(TodoMetrics.cardCornerRadius)
+    Column(
+        modifier = modifier
+            .border(1.dp, TodoColors.sectionBorder, shape)
+            .background(TodoColors.sectionSurface, shape)
+            .padding(TodoMetrics.horizontalPadding),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = title,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = TodoColors.secondaryText
+        )
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun ChatEntryRow(entry: Message) {
+    if (entry.command != null) {
+        ChatActivityRow(entry)
+        return
+    }
+
+    val message = entry.text.orEmpty()
+    val isUser = entry.type == "userMessage"
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Column(
+            modifier = Modifier.widthIn(max = 520.dp),
+            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            SelectionContainer {
+                if (isUser) {
+                    Text(
+                        text = message,
+                        color = TodoColors.userMessageText,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(TodoColors.userMessageSurface)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    )
+                } else {
+                    Text(
+                        text = message,
+                        color = TodoColors.infoText
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatActivityRow(entry: Message) {
+    val operation = entry.command ?: return
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(TodoColors.activitySurface)
+                .padding(horizontal = 10.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "operation",
+                fontSize = 10.sp,
+                color = TodoColors.activityLabelText,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = operation,
+                fontSize = 11.sp,
+                color = TodoColors.secondaryText
+            )
         }
     }
 }
@@ -632,12 +809,19 @@ private object TodoColors {
     private val listBackground = namedColor("List.background", 0xFF262B33, 0xFFFFFFFF)
     private val componentBorder = namedColor("Component.borderColor", 0xFF4B5263, 0xFFC5CDD8)
     private val hoverBackground = namedColor("List.hoverBackground", 0xFF2D4366, 0xFFEAF2FF)
+    private val userMessageBlue = namedColor("Actions.Blue", 0xFF1849C6, 0xFF3574F0)
     private val infoBackground = namedColor("Component.infoBackground", 0xFF24324A, 0xFFF3F7FF)
     val primaryText = namedColor("Label.foreground", 0xFFE6EDF3, 0xFF1F2328)
     val secondaryText = namedColor("Label.infoForeground", 0xFF9DA7B3, 0xFF667281)
     val completedText = secondaryText.copy(alpha = 0.9f)
     val infoSurface = blend(panelBackground, listBackground, 0.9f)
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
+    val sectionSurface = overlay(infoBackground.copy(alpha = 0.08f), blend(panelBackground, listBackground, 0.78f))
+    val sectionBorder = componentBorder.copy(alpha = 0.82f)
+    val userMessageSurface = overlay(userMessageBlue.copy(alpha = 0.78f), blend(listBackground, panelBackground, 0.16f))
+    val userMessageText = namedColor("TextArea.foreground", 0xFFF4F8FF, 0xFF17375E)
+    val activitySurface = overlay(infoBackground.copy(alpha = 0.16f), blend(panelBackground, listBackground, 0.68f))
+    val activityLabelText = namedColor("Label.infoForeground", 0xFFB8C3D1, 0xFF5B6A7C)
 
     fun defaultCard() = TodoCardColors(
         background = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.44f)),
@@ -723,7 +907,13 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
                 Item("text", "aaa-1", checked = true, status = "Done"),
                 Item("text", "aaa-2", checked = false, status = "In Progress"),
             ),
-            response = "AI response",
+            messages = listOf(
+                Message(type = "commandExecution", command = "file read"),
+                Message(type = "agentMessage", text = "I reviewed the current todo order and found the next actionable item."),
+                Message(type = "userMessage", text = "Split the detail view into todo and chat sections."),
+                Message(type = "commandExecution", command = "execute cmd"),
+                Message(type = "agentMessage", text = "Use separate scrollable panes so the todo list stays visible while the conversation grows.")
+            ),
             shoakuId = "shoaku-preview-1"
         ),
         Item(
