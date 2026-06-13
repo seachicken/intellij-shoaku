@@ -407,7 +407,7 @@ private fun SessionDetailSplitter(
                     )
                 }
             }.apply {
-                minimumSize = Dimension(0, JBUI.scale(120))
+                minimumSize = Dimension(0, JBUI.scale(90))
             }
             secondComponent = JewelComposePanel {
                 Box(Modifier.fillMaxSize().padding(top = 2.dp)) {
@@ -614,7 +614,7 @@ private fun ChatActivityRow(entry: Message) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Ran:",
+                text = "Ran",
                 fontSize = 10.sp,
                 color = TodoColors.activityLabelText,
                 fontWeight = FontWeight.Medium
