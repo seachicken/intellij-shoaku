@@ -12,7 +12,7 @@ const appServer = spawn('codex', ['app-server'], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: {
     ...process.env,
-    RUST_LOG: 'debug'
+    RUST_LOG: 'info'
   }
 });
 const shoakuDir = join(homedir(), '.shoaku');
@@ -20,6 +20,7 @@ const sessionsDir = join(shoakuDir, 'sessions');
 const sessionToShoaku = new Map();
 const shoakuToSession = new Map();
 const chatByShoakuId = new Map();
+const goalByShoakuId = new Map();
 
 let initializeParams;
 let lists = [];
@@ -86,6 +87,7 @@ async function startNewSession(goalItem) {
   const workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
   const shoakuId = basename(workDir);
   chatByShoakuId.set(shoakuId, []);
+  goalByShoakuId.set(shoakuId, '');
 
   const [navigatorRes, explorerRes] = await Promise.all([
     sendAppRequest('thread/start', {
@@ -106,7 +108,10 @@ async function startNewSession(goalItem) {
   const navigatorThreadId = navigatorRes.result.thread.id;
   const explorerThreadId = explorerRes.result.thread.id;
   sessionToShoaku.set(navigatorThreadId, shoakuId);
-  shoakuToSession.set(shoakuId, navigatorThreadId);
+  shoakuToSession.set(shoakuId, {
+    navigatorThreadId,
+    explorerThreadId
+  });
 
   await Promise.all([
     sendAppRequest('thread/inject_items', {
@@ -119,7 +124,7 @@ async function startNewSession(goalItem) {
             {
               type: 'input_text',
               text: `
-              You are an assistant that helps developers understand and progress their work.
+              You are an assistant that helps users understand and progress their work.
 
               Responsibilities:
               - Understand the user's overall goals and short-term tasks from their TODO list.
@@ -141,7 +146,7 @@ async function startNewSession(goalItem) {
             {
               type: 'input_text',
               text: `
-              You can understand what the developer wants to achieve and implement it autonomously.
+              You can understand what the users wants to achieve and implement it autonomously.
 
               Responsibilities:
               - Understand the user's overall goals and short-term tasks from their TODO list.
@@ -204,6 +209,7 @@ async function startNewSession(goalItem) {
 
 async function resumeSession(shoakuId) {
   chatByShoakuId.set(shoakuId, []);
+  goalByShoakuId.set(shoakuId, '');
   const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
   if (!metaData.navigatorSessionId || !metaData.explorerSessionId) {
     logWarn(`Invalid session metadata for shoakuId ${shoakuId}`);
@@ -220,7 +226,10 @@ async function resumeSession(shoakuId) {
   ]);
   const navigatorThreadId = navigatorRes.result.thread.id;
   sessionToShoaku.set(navigatorThreadId, shoakuId);
-  shoakuToSession.set(shoakuId, navigatorThreadId);
+  shoakuToSession.set(shoakuId, {
+    navigatorThreadId: metaData.navigatorSessionId,
+    explorerThreadId: metaData.explorerSessionId
+  });
 }
 
 async function syncShoakuLists(filePath) {
@@ -334,7 +343,7 @@ to  do_path:
               if (prevGoalItem?.checked === false && prevGoalItem.shoakuId) {
                 const currentGoalItem = findItemByShoakuId(lists, prevGoalItem.shoakuId);
                 if (currentGoalItem && currentGoalItem.shoakuId === prevGoalItem?.shoakuId && currentGoalItem.checked && !prevGoalItem.checked) {
-                  const sessionId = shoakuToSession.get(currentGoalItem.shoakuId);
+                  const sessionId = shoakuToSession.get(currentGoalItem.shoakuId).navigatorThreadId;
                   if (!sessionId) {
                     logError(`No active session found for shoakuId ${currentGoalItem.shoakuId}`);
                     return;
@@ -369,6 +378,39 @@ to  do_path:
                 }
               }
 
+              if (activeGoalItem?.shoakuId) {
+                await startTurn({
+                  threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
+                  input: [
+                    {
+                      type: "text",
+                      text: `Regarding ${activeGoalItem.content}, Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(activeGoalItem.shoakuId)}", return an empty string.`
+                    }
+                  ]}, {
+                    onItemCompleted: async (id, params) => {
+                      if (params.item.type !== 'agentMessage') {
+                        return;
+                      }
+
+                      logWarn(`goal summary. new: ${params.item.text}, old: ${goalByShoakuId.get(activeGoalItem.shoakuId)}`);
+                      if (params.item.text) {
+                        logWarn('update goal summary')
+                        startTurn({
+                          threadId: shoakuToSession.get(activeGoalItem.shoakuId).explorerThreadId,
+                          input: [
+                            {
+                              type: "text",
+                              text: `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+                            }
+                          ]}
+                        );
+                        goalByShoakuId.set(activeGoalItem.shoakuId, params.item.text);
+                      }
+                    }
+                  }
+                );
+              }
+
               if (activeGoalItem) {
                 prevGoalItem = activeGoalItem;
               }
@@ -389,7 +431,7 @@ to  do_path:
           }
 
           sendAppRequest('thread/inject_items', {
-            threadId: shoakuToSession.get(activeGoalItem.shoakuId),
+            threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
             items: [
               {
                 type: 'message',
@@ -418,7 +460,7 @@ to  do_path:
           break;
 
         case 'shoaku/reply':
-          const sessionId = shoakuToSession.get(message.params.shoakuId);
+          const sessionId = shoakuToSession.get(message.params.shoakuId).navigatorThreadId;
           if (!sessionId) {
             logWarn(`No active session found for shoakuId ${message.params.shoakuId}`);
             break;
@@ -500,10 +542,14 @@ function findActiveItem(lists) {
 const pendingTurns = new Map();
 async function startTurn(params, callbacks) {
   for (const turnId of pendingTurns.keys()) {
-    await sendAppRequest('turn/interrupt', {
-      threadId: params.threadId,
-      turnId
-    });
+    try {
+      await sendAppRequest('turn/interrupt', {
+        threadId: params.threadId,
+        turnId
+      });
+    } catch(err) {
+      logInfo(`Failed to interrupt turn ${turnId}, it might have already been completed. Error: ${err.message}`);
+    }
   }
 
   const msg = await sendAppRequest('turn/start', params);
