@@ -19,6 +19,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intellij.openapi.components.service
@@ -186,6 +187,7 @@ private fun SessionHeaderItem(
 
     Row(
         modifier = Modifier
+            .widthIn(max = SessionHeaderMetrics.maxWidth)
             .clip(shape)
             .background(colors.background, shape)
             .border(
@@ -207,10 +209,12 @@ private fun SessionHeaderItem(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
+            modifier = Modifier.weight(1f, fill = false),
             text = title,
             color = colors.content,
             fontSize = 12.sp,
-            maxLines = 1
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         if (onClose != null) {
             Box(
@@ -757,6 +761,7 @@ private data class HeaderItemColors(
 
 private object SessionHeaderMetrics {
     val cornerRadius = 8.dp
+    val maxWidth = 240.dp
     val horizontalPadding = 10.dp
     val verticalPadding = 6.dp
 }
