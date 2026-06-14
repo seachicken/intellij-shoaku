@@ -45,7 +45,7 @@ class MyToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        toolWindow.addComposeTab(MyMessageBundle.message("toolwindow.stripe.MyToolWindow"), focusOnClickInside = true) {
+        toolWindow.addComposeTab(focusOnClickInside = true) {
             LaunchedEffect(Unit) {
                 // initial data loading
             }
