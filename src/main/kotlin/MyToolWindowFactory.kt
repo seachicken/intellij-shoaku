@@ -69,7 +69,7 @@ private fun MyToolWindowContent(
     val vm = remember { viewModel }
     val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
     var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
-    var detailTodoPaneFraction by remember { mutableStateOf(0.45f) }
+    var detailTodoPaneFraction by remember { mutableStateOf(0.1f) }
     val sessions = vm.items.filter { it.shoakuId != null }
     val openSessions = openSessionKeys.mapNotNull { key -> sessions.firstOrNull { it.sessionKey == key } }
     val selectedSession = selectedSessionKey?.let { key -> sessions.firstOrNull { it.sessionKey == key } }
@@ -391,28 +391,26 @@ private fun SessionDetailSplitter(
     val projectState = rememberUpdatedState(project)
     val splitter = remember {
         OnePixelSplitter(true, todoPaneFraction, 0.1f, 0.9f).apply {
-            dividerWidth = JBUI.scale(3)
+            dividerWidth = JBUI.scale(5)
             divider.background = java.awt.Color(0, 0, 0, 0)
             setHonorComponentsMinimumSize(true)
+            dividerPositionStrategy = Splitter.DividerPositionStrategy.KEEP_FIRST_SIZE
+            lackOfSpaceStrategy = Splitter.LackOfSpaceStrategy.HONOR_THE_FIRST_MIN_SIZE
             isShowDividerControls = false
             isShowDividerIcon = false
             firstComponent = JewelComposePanel {
-                Box(Modifier.fillMaxSize().padding(bottom = 2.dp)) {
-                    SessionTodoPane(
-                        session = sessionState.value,
-                        diffResponse = diffResponseState.value,
-                        filePath = filePathState.value,
-                        viewModel = viewModelState.value,
-                        project = projectState.value
-                    )
-                }
+                SessionTodoPane(
+                    session = sessionState.value,
+                    diffResponse = diffResponseState.value,
+                    filePath = filePathState.value,
+                    viewModel = viewModelState.value,
+                    project = projectState.value
+                )
             }.apply {
                 minimumSize = Dimension(0, JBUI.scale(90))
             }
             secondComponent = JewelComposePanel {
-                Box(Modifier.fillMaxSize().padding(top = 2.dp)) {
-                    SessionChatPane(session = sessionState.value)
-                }
+                SessionChatPane(session = sessionState.value)
             }.apply {
                 minimumSize = Dimension(0, JBUI.scale(220))
             }
