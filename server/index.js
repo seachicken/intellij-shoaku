@@ -305,9 +305,8 @@ process.stdin.on('data', async (chunk) => {
           await mkdir(shoakuDir, { recursive: true });
           await mkdir(sessionsDir, { recursive: true });
           const data = `
---  -
-to  do_path: 
-`.  trimStart();
+---
+`.trimStart();
           await writeFile(join(shoakuDir, 'config.yaml'), data, { flag: "wx" }).catch((e) => {
             if (e.code !== 'EEXIST') {
               throw e;
