@@ -4,7 +4,7 @@ import AgentInputBuilder, { inputType } from './agent-input-builder.js';
 
 describe('AgentInputBuilder', () => {
   let builder;
-  const changeEvent = {
+  const fileChangeEvent = {
     jsonrpc: '2.0',
     method: 'textDocument/didChange',
     params: {
@@ -23,6 +23,23 @@ describe('AgentInputBuilder', () => {
       ]
     }
   };
+  const goalChangeEvent = {
+    type: 'text',
+    content: 'Goal',
+    line: 0,
+    children: [
+      {
+        type: 'text',
+        content: 'Task',
+        line: 1,
+        children: []
+      }
+    ],
+    checked: false,
+    shoakuId: 'shoaku-xxx',
+    labelPosition: { line: 0, start: 10, end: 15 },
+    messages: []
+  }
 
   beforeEach(() => {
     builder = new AgentInputBuilder('/project/root', 1000);
@@ -33,7 +50,7 @@ describe('AgentInputBuilder', () => {
     mock.timers.reset();
   });
 
-  test('builds change operations after debounce', (t, done) => {
+  test('builds file change operations after debounce', (t, done) => {
     builder.onAgentInput((input) => {
       assert.strictEqual(
         input,
@@ -47,13 +64,13 @@ Driver operations:
 
     builder.ingest({
       type: inputType.LSP,
-      content: changeEvent
+      content: fileChangeEvent
     });
 
     mock.timers.tick(1000);
   });
 
-  test('does not build change operations before debounce period', (t) => {
+  test('does not build file change operations before debounce period', (t) => {
     let callCnt = 0;
 
     builder.onAgentInput((input) => {
@@ -62,7 +79,38 @@ Driver operations:
 
     builder.ingest({
       type: inputType.LSP,
-      content: changeEvent
+      content: fileChangeEvent
+    });
+
+    mock.timers.tick(999);
+
+    assert.strictEqual(callCnt, 0);
+  });
+
+  test('builds goal change operations after debounce', (t, done) => {
+    builder.onAgentInput((input) => {
+      assert.strictEqual(input, goalChangeEvent);
+      setImmediate(done);
+    });
+
+    builder.ingest({
+      type: inputType.GOAL,
+      content: goalChangeEvent
+    });
+
+    mock.timers.tick(1000);
+  });
+
+  test('does not build goal change operations before debounce period', (t) => {
+    let callCnt = 0;
+
+    builder.onAgentInput((input) => {
+      callCnt++;
+    });
+
+    builder.ingest({
+      type: inputType.GOAL,
+      content: goalChangeEvent
     });
 
     mock.timers.tick(999);

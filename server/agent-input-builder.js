@@ -23,23 +23,39 @@ export default class AgentInputBuilder {
     this.timer = setTimeout(() => {
       let lastOperation;
       for (const event of this.events) {
-        if (event.type === inputType.LSP) {
-          if (event.content.method === 'textDocument/didChange') {
-            // ex. file:///project/root/Main.java -> Main.java
-            const relativePath = event.content.params.textDocument.uri.slice(this.rootPath.length + 8);
-            const line = event.content.params.contentChanges[0].range.start.line;
-            lastOperation = `- Changed ${relativePath} around line ${line}`;
-          }
+        switch (event.type) {
+          case inputType.LSP:
+            if (event.content.method === 'textDocument/didChange') {
+              // ex. file:///project/root/Main.java -> Main.java
+              const relativePath = event.content.params.textDocument.uri.slice(this.rootPath.length + 8);
+              const line = event.content.params.contentChanges[0].range.start.line;
+              lastOperation = `- Changed ${relativePath} around line ${line}`;
+            }
+            break;
+          case inputType.GOAL:
+            lastOperation = event.content;
+            break;
         }
       }
 
-      if (lastOperation) {
-        for (const listener of this.listeners) {
-          listener(`
+      switch (event.type) {
+        case inputType.LSP:
+          if (lastOperation) {
+            for (const listener of this.listeners) {
+              listener(`
 Driver operations:
 ${lastOperation}
-          `.trim());
-        }
+              `.trim());
+            }
+          }
+          break;
+        case inputType.GOAL:
+          if (lastOperation) {
+            for (const listener of this.listeners) {
+              listener(lastOperation);
+            }
+          }
+          break;
       }
     }, this.debounceMs);
   }

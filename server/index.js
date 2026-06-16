@@ -13,7 +13,7 @@ const appServer = spawn('codex', ['app-server'], {
   stdio: ['pipe', 'pipe', 'pipe'],
   env: {
     ...process.env,
-    RUST_LOG: 'info'
+    RUST_LOG: 'warn'
   }
 });
 const shoakuDir = join(homedir(), '.shoaku');
@@ -25,6 +25,7 @@ const goalByShoakuId = new Map();
 
 let initializeParams;
 let agentInputbuilder;
+let goalInputbuilder;
 let lists = [];
 let activeGoalItem;
 let prevGoalItem;
@@ -354,6 +355,43 @@ process.stdin.on('data', async (chunk) => {
             );
           });
 
+          goalInputbuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
+          goalInputbuilder.onAgentInput(async (input) => {
+            logWarn(`debounce goal input: ${JSON.stringify(input)}`);
+            if (input?.shoakuId) {
+              startTurn({
+                threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+                input: [
+                  {
+                    type: "text",
+                    text: `Regarding ${input.content}, Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
+                  }
+                ]}, {
+                  onItemCompleted: async (id, params) => {
+                    if (params.item.type !== 'agentMessage') {
+                      return;
+                    }
+
+                    logWarn(`goal summary. new: ${params.item.text}, old: ${goalByShoakuId.get(activeGoalItem.shoakuId)}`);
+                    if (params.item.text) {
+                      logWarn('update goal summary')
+                      startTurn({
+                        threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
+                        input: [
+                          {
+                            type: "text",
+                            text: `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+                          }
+                        ]}
+                      );
+                      goalByShoakuId.set(input.shoakuId, params.item.text);
+                    }
+                  }
+                }
+              );
+            }
+          });
+
           appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
             clientInfo: {
               name: "shoaku_intellij",
@@ -378,6 +416,12 @@ process.stdin.on('data', async (chunk) => {
             for await (const event of watch(initializeParams.initializationOptions.filePath)) {
               await syncShoakuLists(initializeParams.initializationOptions.filePath);
               activeGoalItem = findActiveParentItem(lists);
+              if (goalInputbuilder) {
+                goalInputbuilder.ingest({
+                  type: inputType.GOAL,
+                  content: activeGoalItem
+                });
+              }
 
               for (const item of lists) {
                 if (item.checked === false && !item.shoakuId) {
@@ -422,39 +466,6 @@ process.stdin.on('data', async (chunk) => {
                     }
                   );
                 }
-              }
-
-              if (activeGoalItem?.shoakuId) {
-                await startTurn({
-                  threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
-                  input: [
-                    {
-                      type: "text",
-                      text: `Regarding ${activeGoalItem.content}, Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(activeGoalItem.shoakuId)}", return an empty string.`
-                    }
-                  ]}, {
-                    onItemCompleted: async (id, params) => {
-                      if (params.item.type !== 'agentMessage') {
-                        return;
-                      }
-
-                      logWarn(`goal summary. new: ${params.item.text}, old: ${goalByShoakuId.get(activeGoalItem.shoakuId)}`);
-                      if (params.item.text) {
-                        logWarn('update goal summary')
-                        startTurn({
-                          threadId: shoakuToSession.get(activeGoalItem.shoakuId).explorerThreadId,
-                          input: [
-                            {
-                              type: "text",
-                              text: `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
-                            }
-                          ]}
-                        );
-                        goalByShoakuId.set(activeGoalItem.shoakuId, params.item.text);
-                      }
-                    }
-                  }
-                );
               }
 
               if (activeGoalItem) {
