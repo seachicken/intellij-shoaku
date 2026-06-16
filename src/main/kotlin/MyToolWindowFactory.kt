@@ -12,11 +12,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -26,11 +26,13 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.intellij.openapi.components.service
@@ -437,7 +439,9 @@ private fun SessionTodoPane(
         modifier = Modifier.fillMaxSize()
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             items(session.children.filter { it.checked != null }) { model ->
@@ -477,9 +481,7 @@ private fun SessionTodoPane(
                             }
                         }
                     ) {
-                        SelectionContainer {
-                            Text(diffResponse.diff, color = TodoColors.infoText)
-                        }
+                        Text(diffResponse.diff, color = TodoColors.infoText)
                     }
                 }
             }
@@ -508,14 +510,27 @@ private fun SessionChatPane(
                 Text("No messages yet", color = TodoColors.secondaryText)
             }
         } else {
-            LazyColumn(
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(session.messages) { entry ->
-                    ChatEntryRow(entry)
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clipToBounds(),
+                    contentPadding = PaddingValues(bottom = 4.dp)
+                ) {
+                    itemsIndexed(session.messages) { index, entry ->
+                        val previousEntry = session.messages.getOrNull(index - 1)
+                        val previousIsSameSpeaker = previousEntry?.type == entry.type && previousEntry.command == null && entry.command == null
+
+                        ChatEntryRow(
+                            entry = entry,
+                            isFirstInGroup = !previousIsSameSpeaker,
+                            topSpacing = if (previousIsSameSpeaker) 4.dp else 10.dp
+                        )
+                    }
                 }
             }
         }
@@ -545,7 +560,9 @@ private fun ChatComposer(
 ) {
     val canSend = enabled && value.text.isNotBlank()
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clipToBounds(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
@@ -680,7 +697,9 @@ private fun SessionSectionCard(
             color = TodoColors.primaryText
         )
         Column(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             content = content
         )
@@ -688,24 +707,42 @@ private fun SessionSectionCard(
 }
 
 @Composable
-private fun ChatEntryRow(entry: Message) {
+private fun ChatEntryRow(
+    entry: Message,
+    isFirstInGroup: Boolean,
+    topSpacing: Dp
+) {
     if (entry.command != null) {
-        ChatActivityRow(entry)
+        ChatActivityRow(entry = entry, topSpacing = topSpacing)
         return
     }
 
     val message = entry.text.orEmpty()
     val isUser = entry.type == "userMessage"
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = topSpacing),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Column(
-            modifier = Modifier.widthIn(max = 520.dp),
-            horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        if (!isUser && isFirstInGroup) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(TodoColors.agentMessageDivider)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
         ) {
-            SelectionContainer {
+            Column(
+                modifier = Modifier.widthIn(max = 520.dp),
+                horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 if (isUser) {
                     Text(
                         text = message,
@@ -716,9 +753,51 @@ private fun ChatEntryRow(entry: Message) {
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     )
                 } else {
+                    AgentMessageContent(message = message)
+                }
+            }
+        }
+    }
+}
+
+private sealed interface AgentMessageBlock {
+    data class Paragraph(val text: String) : AgentMessageBlock
+    data class Code(val language: String?, val code: String) : AgentMessageBlock
+}
+
+@Composable
+private fun AgentMessageContent(message: String) {
+    val blocks = remember(message) { parseAgentMessageBlocks(message) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is AgentMessageBlock.Paragraph -> Text(
+                    text = block.text,
+                    color = TodoColors.infoText
+                )
+
+                is AgentMessageBlock.Code -> Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(TodoColors.codeBlockSurface)
+                        .border(1.dp, TodoColors.codeBlockBorder, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    block.language?.takeIf { it.isNotBlank() }?.let { language ->
+                        Text(
+                            text = language,
+                            color = TodoColors.secondaryText,
+                            fontSize = 11.sp
+                        )
+                    }
                     Text(
-                        text = message,
-                        color = TodoColors.infoText
+                        text = block.code,
+                        color = TodoColors.infoText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp
                     )
                 }
             }
@@ -726,11 +805,66 @@ private fun ChatEntryRow(entry: Message) {
     }
 }
 
+private fun parseAgentMessageBlocks(message: String): List<AgentMessageBlock> {
+    val fence = "```"
+    if (!message.contains(fence)) {
+        return listOf(AgentMessageBlock.Paragraph(message))
+    }
+
+    val blocks = mutableListOf<AgentMessageBlock>()
+    var cursor = 0
+    while (cursor < message.length) {
+        val fenceStart = message.indexOf(fence, cursor)
+        if (fenceStart == -1) {
+            val tail = message.substring(cursor)
+            if (tail.isNotEmpty()) {
+                blocks += AgentMessageBlock.Paragraph(tail)
+            }
+            break
+        }
+
+        if (fenceStart > cursor) {
+            val paragraph = message.substring(cursor, fenceStart)
+            if (paragraph.isNotEmpty()) {
+                blocks += AgentMessageBlock.Paragraph(paragraph)
+            }
+        }
+
+        val infoLineStart = fenceStart + fence.length
+        val codeStart = message.indexOf('\n', infoLineStart)
+        if (codeStart == -1) {
+            blocks += AgentMessageBlock.Paragraph(message.substring(fenceStart))
+            break
+        }
+
+        val infoString = message.substring(infoLineStart, codeStart).trim().ifBlank { null }
+        val fenceEnd = message.indexOf(fence, codeStart + 1)
+        if (fenceEnd == -1) {
+            blocks += AgentMessageBlock.Paragraph(message.substring(fenceStart))
+            break
+        }
+
+        val code = message.substring(codeStart + 1, fenceEnd).trimEnd('\n', '\r')
+        blocks += AgentMessageBlock.Code(language = infoString, code = code)
+        cursor = fenceEnd + fence.length
+        if (cursor < message.length && message[cursor] == '\n') {
+            cursor += 1
+        }
+    }
+
+    return blocks.ifEmpty { listOf(AgentMessageBlock.Paragraph(message)) }
+}
+
 @Composable
-private fun ChatActivityRow(entry: Message) {
+private fun ChatActivityRow(
+    entry: Message,
+    topSpacing: Dp
+) {
     val command = entry.command ?: return
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = topSpacing),
         horizontalArrangement = Arrangement.Start
     ) {
         Text(
@@ -742,12 +876,11 @@ private fun ChatActivityRow(entry: Message) {
 }
 
 private data class SessionKey(
-    val type: String,
-    val content: String
+    val shoakuId: String
 )
 
 private val Item.sessionKey
-    get() = SessionKey(type, content)
+    get() = SessionKey(requireNotNull(shoakuId))
 
 @Composable
 private fun TodoRow(
@@ -934,6 +1067,9 @@ private object TodoColors {
     val infoSurface = blend(panelBackground, listBackground, 0.9f)
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
     val sectionSurface = overlay(infoBackground.copy(alpha = 0.08f), blend(panelBackground, listBackground, 0.78f))
+    val agentMessageDivider = componentBorder.copy(alpha = 0.54f)
+    val codeBlockSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.5f))
+    val codeBlockBorder = componentBorder.copy(alpha = 0.72f)
     val userMessageSurface = overlay(userMessageBlue.copy(alpha = 0.78f), blend(listBackground, panelBackground, 0.16f))
     val userMessageText = namedColor("TextArea.foreground", 0xFFF4F8FF, 0xFF17375E)
     val composerSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.28f))
