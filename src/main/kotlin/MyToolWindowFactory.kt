@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
@@ -17,7 +18,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -37,6 +48,7 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
+import org.jetbrains.jewel.ui.icon.PathIconKey
 import java.awt.Dimension
 import java.beans.PropertyChangeListener
 import kotlin.math.abs
@@ -57,6 +69,8 @@ class MyToolWindowFactory : ToolWindowFactory {
         }
     }
 }
+
+private val ChatSendIconKey = PathIconKey("/icons/send/send.svg", MyToolWindowFactory::class.java)
 
 @Composable
 private fun MyToolWindowContent(
@@ -319,7 +333,6 @@ private fun SessionDetailContent(
     onTodoPaneFractionChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val instructionState = rememberTextFieldState()
     val diffResponse = session.shoakuId?.let { viewModel.diffResponses[it] }
 
     Column(
@@ -336,44 +349,6 @@ private fun SessionDetailContent(
             onTodoPaneFractionChange = onTodoPaneFractionChange,
             modifier = Modifier.weight(1f).fillMaxWidth()
         )
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            TextField(
-                state = instructionState,
-                modifier = Modifier.weight(1f),
-                placeholder = { Text("Input...") },
-                enabled = session.shoakuId != null
-            )
-            OutlinedButton(
-                onClick = {
-                    val instruction = instructionState.text.toString()
-                    if (instruction.isNotBlank()) {
-                        project?.let {
-                            LspServerManager.getInstance(project)
-                                .getServersForProvider(LanguageServerProvider::class.java)
-                                .first()
-                                .sendNotification {
-                                    (it as AppLanguageServer).reply(
-                                        ReplyParams(
-                                            session.shoakuId!!,
-                                            instruction
-                                        )
-                                    )
-                                }
-                        }
-
-                        instructionState.setTextAndPlaceCursorAtEnd("")
-                    }
-                },
-                enabled = session.shoakuId != null
-            ) {
-                Text("Send")
-            }
-        }
     }
 }
 
@@ -414,7 +389,10 @@ private fun SessionDetailSplitter(
                 minimumSize = Dimension(0, JBUI.scale(90))
             }
             secondComponent = JewelComposePanel {
-                SessionChatPane(session = sessionState.value)
+                SessionChatPane(
+                    session = sessionState.value,
+                    project = projectState.value
+                )
             }.apply {
                 minimumSize = Dimension(0, JBUI.scale(220))
             }
@@ -510,21 +488,30 @@ private fun SessionTodoPane(
 }
 
 @Composable
-private fun SessionChatPane(session: Item) {
+private fun SessionChatPane(
+    session: Item,
+    project: Project?
+) {
+    var instructionValue by remember { mutableStateOf(TextFieldValue()) }
+    val isEnabled = session.shoakuId != null
     SessionSectionCard(
         title = "Chat",
         modifier = Modifier.fillMaxSize()
     ) {
         if (session.messages?.isEmpty() ?: true) {
             Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
                 Text("No messages yet", color = TodoColors.secondaryText)
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(session.messages) { entry ->
@@ -532,7 +519,146 @@ private fun SessionChatPane(session: Item) {
                 }
             }
         }
+
+        ChatComposer(
+            value = instructionValue,
+            onValueChange = { instructionValue = it },
+            enabled = isEnabled,
+            onSend = {
+                sendSessionReply(
+                    project = project,
+                    shoakuId = session.shoakuId,
+                    instruction = instructionValue.text
+                )
+                instructionValue = TextFieldValue()
+            }
+        )
     }
+}
+
+@Composable
+private fun ChatComposer(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    enabled: Boolean,
+    onSend: () -> Unit
+) {
+    val canSend = enabled && value.text.isNotBlank()
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(TodoColors.composerSurface)
+                .border(1.dp, TodoColors.composerBorder, RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(end = 42.dp)
+                    .defaultMinSize(minHeight = 52.dp)
+                    .onPreviewKeyEvent { event ->
+                        if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
+                            if (event.isShiftPressed) {
+                                onValueChange(value.insertNewline())
+                                true
+                            } else if (canSend) {
+                                onSend()
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    },
+                enabled = enabled,
+                maxLines = 8,
+                textStyle = TextStyle(
+                    color = TodoColors.primaryText,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
+                ),
+                cursorBrush = SolidColor(TodoColors.primaryText),
+                decorationBox = { innerTextField ->
+                    if (value.text.isEmpty()) {
+                        Text(
+                            text = "Ask Shoaku",
+                            color = TodoColors.secondaryText.copy(alpha = 0.75f),
+                            fontSize = 13.sp
+                        )
+                    }
+                    innerTextField()
+                }
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        if (canSend) TodoColors.composerSendSurface else TodoColors.composerSendSurface.copy(alpha = 0.35f)
+                    )
+                    .clickable(enabled = canSend) { onSend() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    key = ChatSendIconKey,
+                    contentDescription = "Send"
+                )
+            }
+        }
+        Text(
+            text = "Enter to send  Shift+Enter for newline",
+            color = TodoColors.secondaryText.copy(alpha = 0.72f),
+            fontSize = 11.sp
+        )
+    }
+}
+
+private fun sendSessionReply(
+    project: Project?,
+    shoakuId: String?,
+    instruction: String
+) {
+    if (shoakuId == null || instruction.isBlank()) {
+        return
+    }
+
+    project?.let {
+        LspServerManager.getInstance(project)
+            .getServersForProvider(LanguageServerProvider::class.java)
+            .first()
+            .sendNotification {
+                (it as AppLanguageServer).reply(
+                    ReplyParams(
+                        shoakuId,
+                        instruction
+                    )
+                )
+            }
+    }
+}
+
+private fun TextFieldValue.insertNewline(): TextFieldValue {
+    val start = selection.min
+    val end = selection.max
+    val updatedText = buildString(text.length + 1) {
+        append(text, 0, start)
+        append('\n')
+        append(text, end, text.length)
+    }
+    val cursor = start + 1
+    return copy(
+        text = updatedText,
+        selection = TextRange(cursor)
+    )
 }
 
 @Composable
@@ -607,26 +733,11 @@ private fun ChatActivityRow(entry: Message) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(999.dp))
-                .background(TodoColors.activitySurface)
-                .padding(horizontal = 10.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Ran",
-                fontSize = 10.sp,
-                color = TodoColors.activityLabelText,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                text = command,
-                fontSize = 11.sp,
-                color = TodoColors.secondaryText
-            )
-        }
+        Text(
+            text = "Ran $command",
+            fontSize = 11.sp,
+            color = TodoColors.secondaryText.copy(alpha = 0.78f)
+        )
     }
 }
 
@@ -823,11 +934,11 @@ private object TodoColors {
     val infoSurface = blend(panelBackground, listBackground, 0.9f)
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
     val sectionSurface = overlay(infoBackground.copy(alpha = 0.08f), blend(panelBackground, listBackground, 0.78f))
-    val sectionBorder = componentBorder.copy(alpha = 0.82f)
     val userMessageSurface = overlay(userMessageBlue.copy(alpha = 0.78f), blend(listBackground, panelBackground, 0.16f))
     val userMessageText = namedColor("TextArea.foreground", 0xFFF4F8FF, 0xFF17375E)
-    val activitySurface = overlay(infoBackground.copy(alpha = 0.16f), blend(panelBackground, listBackground, 0.68f))
-    val activityLabelText = namedColor("Label.infoForeground", 0xFFB8C3D1, 0xFF5B6A7C)
+    val composerSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.28f))
+    val composerBorder = componentBorder.copy(alpha = 0.82f)
+    val composerSendSurface = overlay(userMessageBlue.copy(alpha = 0.88f), blend(listBackground, panelBackground, 0.12f))
 
     fun defaultCard() = TodoCardColors(
         background = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.44f)),
