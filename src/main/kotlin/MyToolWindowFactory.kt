@@ -1,12 +1,20 @@
 package shoaku
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.awt.SwingPanel
@@ -306,7 +314,9 @@ private fun SessionListContent(
             return
         }
 
-        LazyColumn(
+        val listState = rememberLazyListState()
+        ScrollHintLazyColumn(
+            state = listState,
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -438,7 +448,9 @@ private fun SessionTodoPane(
         title = "Tasks",
         modifier = Modifier.fillMaxSize()
     ) {
-        LazyColumn(
+        val listState = rememberLazyListState()
+        ScrollHintLazyColumn(
+            state = listState,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
@@ -510,27 +522,23 @@ private fun SessionChatPane(
                 Text("No messages yet", color = TodoColors.secondaryText)
             }
         } else {
-            Box(
+            val listState = rememberLazyListState()
+            ScrollHintLazyColumn(
+                state = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
+                contentPadding = PaddingValues(bottom = 4.dp)
             ) {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clipToBounds(),
-                    contentPadding = PaddingValues(bottom = 4.dp)
-                ) {
-                    itemsIndexed(session.messages) { index, entry ->
-                        val previousEntry = session.messages.getOrNull(index - 1)
-                        val previousIsSameSpeaker = previousEntry?.type == entry.type && previousEntry.command == null && entry.command == null
+                itemsIndexed(session.messages) { index, entry ->
+                    val previousEntry = session.messages.getOrNull(index - 1)
+                    val previousIsSameSpeaker = previousEntry?.type == entry.type && previousEntry.command == null && entry.command == null
 
-                        ChatEntryRow(
-                            entry = entry,
-                            isFirstInGroup = !previousIsSameSpeaker,
-                            topSpacing = if (previousIsSameSpeaker) 4.dp else 10.dp
-                        )
-                    }
+                    ChatEntryRow(
+                        entry = entry,
+                        isFirstInGroup = !previousIsSameSpeaker,
+                        topSpacing = if (previousIsSameSpeaker) 4.dp else 10.dp
+                    )
                 }
             }
         }
@@ -703,6 +711,62 @@ private fun SessionSectionCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             content = content
         )
+    }
+}
+
+@Composable
+private fun ScrollHintLazyColumn(
+    state: LazyListState,
+    modifier: Modifier = Modifier,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    content: LazyListScope.() -> Unit
+) {
+    val showScrollHint by remember(state) {
+        derivedStateOf {
+            val layoutInfo = state.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf false
+
+            lastVisible.index < totalItems - 1 ||
+                lastVisible.offset + lastVisible.size > layoutInfo.viewportEndOffset
+        }
+    }
+
+    Box(modifier = modifier) {
+        LazyColumn(
+            state = state,
+            modifier = Modifier
+                .fillMaxSize()
+                .clipToBounds(),
+            verticalArrangement = verticalArrangement,
+            contentPadding = contentPadding,
+            content = content
+        )
+
+        AnimatedVisibility(
+            visible = showScrollHint,
+            enter = fadeIn() + scaleIn(initialScale = 0.92f),
+            exit = fadeOut() + scaleOut(targetScale = 0.92f),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 10.dp, bottom = 10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(TodoColors.scrollHintSurface)
+                    .border(1.dp, TodoColors.scrollHintBorder, RoundedCornerShape(999.dp))
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = "↓",
+                    color = TodoColors.scrollHintContent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
     }
 }
 
@@ -1075,6 +1139,9 @@ private object TodoColors {
     val composerSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.28f))
     val composerBorder = componentBorder.copy(alpha = 0.82f)
     val composerSendSurface = overlay(userMessageBlue.copy(alpha = 0.88f), blend(listBackground, panelBackground, 0.12f))
+    val scrollHintSurface = overlay(userMessageBlue.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.4f))
+    val scrollHintBorder = componentBorder.copy(alpha = 0.68f)
+    val scrollHintContent = namedColor("Label.foreground", 0xFFEAF2FF, 0xFF1D4A85)
 
     fun defaultCard() = TodoCardColors(
         background = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.44f)),
