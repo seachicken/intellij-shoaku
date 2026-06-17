@@ -23,11 +23,16 @@ import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -67,6 +72,7 @@ import java.awt.Dimension
 import java.beans.PropertyChangeListener
 import java.util.Locale
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 class MyToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
@@ -408,6 +414,7 @@ private fun SessionDetailSplitter(
             secondComponent = JewelComposePanel {
                 SessionChatPane(
                     session = sessionState.value,
+                    viewModel = viewModelState.value,
                     project = projectState.value
                 )
             }.apply {
@@ -449,12 +456,25 @@ private fun SessionTodoPane(
     viewModel: ShoakuViewModel,
     project: Project?
 ) {
+    val todoItems = session.children.filter { it.checked != null }
+    val remainingCount = todoItems.count { it.checked == false }
+
     SessionSectionCard(
-        title = "Tasks",
+        header = {
+            SessionSectionHeader(
+                title = "Tasks",
+                trailing = {
+                    Text(
+                        text = "$remainingCount left",
+                        fontSize = 11.sp,
+                        color = TodoColors.secondaryText
+                    )
+                }
+            )
+        },
         modifier = Modifier.fillMaxSize()
     ) {
         val listState = rememberLazyListState()
-        val todoItems = session.children.filter { it.checked != null }
         val activeItemIndex = todoItems.indexOfFirst { it.checked == false }
 
         LaunchedEffect(todoItems) {
@@ -521,22 +541,36 @@ private fun SessionTodoPane(
 @Composable
 private fun SessionChatPane(
     session: Item,
+    viewModel: ShoakuViewModel,
     project: Project?
 ) {
     var instructionValue by remember { mutableStateOf(TextFieldValue()) }
     val isEnabled = session.shoakuId != null
     val messages = session.messages.orEmpty()
+    val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
+        val base = session.tokenUsage ?: return@remember null
+        val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
+        base.copy(maxTokens = overrideMax.coerceAtLeast(1))
+    }
     SessionSectionCard(
-        title = "Chat",
+        header = {
+            SessionSectionHeader(
+                title = "Chat",
+                trailing = {
+                    TokenUsageIndicator(
+                        tokenUsage = effectiveTokenUsage,
+                        onIncreaseBudget = {
+                            val shoakuId = session.shoakuId ?: return@TokenUsageIndicator
+                            val currentMax = effectiveTokenUsage?.maxTokens ?: session.tokenUsage?.maxTokens ?: return@TokenUsageIndicator
+                            val increment = (currentMax / 10f).toInt().coerceAtLeast(1)
+                            viewModel.tokenBudgetOverrides[shoakuId] = currentMax + increment
+                        }
+                    )
+                }
+            )
+        },
         modifier = Modifier.fillMaxSize()
     ) {
-        session.tokenUsage?.let { tokenUsage ->
-            TokenUsageCard(
-                tokenUsage = tokenUsage,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
         if (messages.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -587,21 +621,135 @@ private fun SessionChatPane(
 }
 
 @Composable
+private fun TokenUsageIndicator(
+    tokenUsage: TokenUsageUi?,
+    onIncreaseBudget: (() -> Unit)? = null
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val pressed by interactionSource.collectIsPressedAsState()
+    val usageFraction = remember(tokenUsage) {
+        if (tokenUsage == null) {
+            0f
+        } else {
+            val maxTokens = tokenUsage.maxTokens.coerceAtLeast(1)
+            ((tokenUsage.navigatorTokens + tokenUsage.explorerTokens).toFloat() / maxTokens).coerceIn(0f, 1f)
+        }
+    }
+    val indicatorColor = when {
+        usageFraction >= 0.9f -> TodoColors.explorerTokenUsage
+        usageFraction >= 0.7f -> TodoColors.navigatorTokenUsage
+        tokenUsage == null -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.7f)
+        else -> TodoColors.scrollHintContent
+    }
+    val chipBackground = when {
+        pressed -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.18f)
+        hovered || expanded -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.1f)
+        else -> Color.Transparent
+    }
+    val chipBorder = when {
+        hovered || expanded -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.5f)
+        else -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.22f)
+    }
+
+    Box {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(999.dp))
+                .background(chipBackground)
+                .border(1.dp, chipBorder, RoundedCornerShape(999.dp))
+                .hoverable(interactionSource)
+                .clickable(indication = null, interactionSource = interactionSource) {
+                    expanded = !expanded
+                }
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .drawBehind {
+                        val strokeWidth = size.minDimension * 0.22f
+                        drawArc(
+                            color = TodoColors.tokenUsageTrackBorder.copy(alpha = 0.45f),
+                            startAngle = -90f,
+                            sweepAngle = 360f,
+                            useCenter = false,
+                            style = Stroke(width = strokeWidth)
+                        )
+                        drawArc(
+                            color = indicatorColor,
+                            startAngle = -90f,
+                            sweepAngle = 360f * usageFraction,
+                            useCenter = false,
+                            style = Stroke(width = strokeWidth)
+                        )
+                    }
+            )
+            Text(
+                text = formatTokenSummary(tokenUsage),
+                fontSize = 11.sp,
+                color = TodoColors.secondaryText
+            )
+        }
+
+        if (expanded && tokenUsage != null) {
+            Popup(
+                alignment = Alignment.TopEnd,
+                offset = androidx.compose.ui.unit.IntOffset(0, 32),
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(min = 300.dp, max = 360.dp)
+                        .shadow(16.dp, RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(TodoColors.popupSurface)
+                        .border(1.dp, TodoColors.popupBorder, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Token budget",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TodoColors.primaryText
+                        )
+                    }
+                    TokenUsageCard(
+                        tokenUsage = tokenUsage,
+                        onIncreaseBudget = onIncreaseBudget,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TokenUsageCard(
     tokenUsage: TokenUsageUi,
+    onIncreaseBudget: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    var maxTokens by remember(tokenUsage.maxTokens) { mutableStateOf(tokenUsage.maxTokens.coerceAtLeast(1)) }
     var addButtonHovered by remember { mutableStateOf(false) }
     val navigatorTokens = tokenUsage.navigatorTokens.coerceAtLeast(0)
     val explorerTokens = tokenUsage.explorerTokens.coerceAtLeast(0)
     val totalTokens = navigatorTokens + explorerTokens
+    val maxTokens = tokenUsage.maxTokens.coerceAtLeast(1)
     val clampedNavigatorFraction = (navigatorTokens.toFloat() / maxTokens).coerceIn(0f, 1f)
     val clampedExplorerFraction = (explorerTokens.toFloat() / maxTokens).coerceIn(0f, 1f - clampedNavigatorFraction)
 
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -609,7 +757,7 @@ private fun TokenUsageCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TokenLegendItem(
@@ -623,7 +771,7 @@ private fun TokenUsageCard(
             }
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -642,14 +790,11 @@ private fun TokenUsageCard(
                             append(formatTokenCount(maxTokens))
                         }
                     },
-                    fontSize = 11.sp
+                    fontSize = 12.sp
                 )
                 CompactAddButton(
                     onHoverChange = { addButtonHovered = it },
-                    onClick = {
-                        val increment = (maxTokens / 10f).toInt().coerceAtLeast(1)
-                        maxTokens += increment
-                    }
+                    onClick = { onIncreaseBudget?.invoke() }
                 )
             }
         }
@@ -657,7 +802,7 @@ private fun TokenUsageCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(4.dp)
+                .height(6.dp)
                 .clip(RoundedCornerShape(999.dp))
                 .background(TodoColors.tokenUsageTrack)
                 .border(1.dp, TodoColors.tokenUsageTrackBorder, RoundedCornerShape(999.dp))
@@ -710,7 +855,7 @@ private fun TokenLegendItem(
         Text(
             text = label,
             color = TodoColors.secondaryText,
-            fontSize = 10.sp
+            fontSize = 11.sp
         )
     }
 }
@@ -744,13 +889,13 @@ private fun CompactAddButton(
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = "+10%",
-            color = TodoColors.primaryText,
-            fontSize = 10.sp,
+            color = TodoColors.tokenUsageButtonContent,
+            fontSize = 11.sp,
             fontWeight = FontWeight.Medium
         )
     }
@@ -888,6 +1033,15 @@ private fun formatTokenCount(value: Int): String {
     return compactTokenFormatter.format(value.coerceAtLeast(0))
 }
 
+private fun formatTokenSummary(tokenUsage: TokenUsageUi?): String {
+    if (tokenUsage == null) {
+        return "-- / --"
+    }
+
+    val totalTokens = tokenUsage.navigatorTokens.coerceAtLeast(0) + tokenUsage.explorerTokens.coerceAtLeast(0)
+    return "${formatTokenCount(totalTokens)} / ${formatTokenCount(tokenUsage.maxTokens.coerceAtLeast(1))}"
+}
+
 private val compactTokenFormatter: NumberFormat =
     NumberFormat.getCompactNumberInstance(Locale.US, NumberFormat.Style.SHORT).apply {
         maximumFractionDigits = 1
@@ -895,7 +1049,7 @@ private val compactTokenFormatter: NumberFormat =
 
 @Composable
 private fun SessionSectionCard(
-    title: String,
+    header: @Composable () -> Unit,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
@@ -905,18 +1059,37 @@ private fun SessionSectionCard(
             .padding(TodoMetrics.horizontalPadding),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TodoColors.primaryText
-        )
+        header()
         Column(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             content = content
+        )
+    }
+}
+
+@Composable
+private fun SessionSectionHeader(
+    title: String,
+    trailing: @Composable RowScope.() -> Unit = {}
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = TodoColors.primaryText
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = trailing
         )
     }
 }
@@ -929,6 +1102,7 @@ private fun ScrollHintLazyColumn(
     contentPadding: PaddingValues = PaddingValues(0.dp),
     content: LazyListScope.() -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     val showScrollHint by remember(state) {
         derivedStateOf {
             val layoutInfo = state.layoutInfo
@@ -965,6 +1139,17 @@ private fun ScrollHintLazyColumn(
                     .clip(RoundedCornerShape(999.dp))
                     .background(TodoColors.scrollHintSurface)
                     .border(1.dp, TodoColors.scrollHintBorder, RoundedCornerShape(999.dp))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) {
+                        val lastIndex = state.layoutInfo.totalItemsCount - 1
+                        if (lastIndex >= 0) {
+                            scope.launch {
+                                state.animateScrollToItem(lastIndex)
+                            }
+                        }
+                    }
                     .padding(bottom = 1.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -1340,6 +1525,8 @@ private object TodoColors {
     val infoSurface = blend(panelBackground, listBackground, 0.9f)
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
     val sectionSurface = overlay(infoBackground.copy(alpha = 0.08f), blend(panelBackground, listBackground, 0.78f))
+    val popupSurface = overlay(infoBackground.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.62f))
+    val popupBorder = componentBorder.copy(alpha = 0.9f)
     val agentMessageDivider = componentBorder.copy(alpha = 0.54f)
     val codeBlockSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.5f))
     val codeBlockBorder = componentBorder.copy(alpha = 0.72f)
@@ -1355,10 +1542,11 @@ private object TodoColors {
     val tokenUsageTrackBorder = componentBorder.copy(alpha = 0.62f)
     val navigatorTokenUsage = namedColor("Actions.Blue", 0xFF3574F0, 0xFF3574F0)
     val explorerTokenUsage = namedColor("Actions.Green", 0xFF4FAF6B, 0xFF3D9B58)
-    val tokenUsageButtonSurface = overlay(infoBackground.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.36f))
-    val tokenUsageButtonHover = overlay(hoverBackground.copy(alpha = 0.22f), blend(listBackground, panelBackground, 0.28f))
-    val tokenUsageButtonPressed = overlay(userMessageBlue.copy(alpha = 0.16f), blend(listBackground, panelBackground, 0.22f))
-    val tokenUsageButtonBorder = componentBorder.copy(alpha = 0.92f)
+    val tokenUsageButtonSurface = overlay(userMessageBlue.copy(alpha = 0.2f), blend(listBackground, panelBackground, 0.46f))
+    val tokenUsageButtonHover = overlay(userMessageBlue.copy(alpha = 0.3f), blend(listBackground, panelBackground, 0.36f))
+    val tokenUsageButtonPressed = overlay(userMessageBlue.copy(alpha = 0.42f), blend(listBackground, panelBackground, 0.28f))
+    val tokenUsageButtonBorder = overlay(userMessageBlue.copy(alpha = 0.34f), componentBorder.copy(alpha = 0.92f))
+    val tokenUsageButtonContent = namedColor("Label.foreground", 0xFFF2F7FF, 0xFF17375E)
 
     fun defaultCard() = TodoCardColors(
         background = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.44f)),

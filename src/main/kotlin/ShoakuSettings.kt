@@ -26,4 +26,5 @@ class ShoakuSettings : PersistentStateComponent<ShoakuSettings.State> {
 class ShoakuViewModel {
     var items by mutableStateOf<List<Item>>(emptyList())
     val diffResponses = mutableStateMapOf<String, ShoakuShowDiffParams>()
+    val tokenBudgetOverrides = mutableStateMapOf<String, Int>()
 }
