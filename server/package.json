@@ -15,5 +15,8 @@
     "type": "git",
     "url": "git+https://github.com/seachicken/intellij-shoaku.git"
   },
-  "description": "Agent server for the Shoaku AI coding assistant"
+  "description": "Agent server for the Shoaku AI coding assistant",
+  "dependencies": {
+    "yaml": "^2.9.0"
+  }
 }
