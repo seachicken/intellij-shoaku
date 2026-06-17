@@ -38,7 +38,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -452,6 +454,18 @@ private fun SessionTodoPane(
         modifier = Modifier.fillMaxSize()
     ) {
         val listState = rememberLazyListState()
+        val todoItems = session.children.filter { it.checked != null }
+        val activeItemIndex = todoItems.indexOfFirst { it.checked == false }
+
+        LaunchedEffect(todoItems) {
+            if (todoItems.isEmpty()) {
+                return@LaunchedEffect
+            }
+
+            val targetIndex = if (activeItemIndex >= 0) activeItemIndex else todoItems.lastIndex
+            listState.animateScrollToItem(targetIndex)
+        }
+
         ScrollHintLazyColumn(
             state = listState,
             modifier = Modifier
@@ -459,7 +473,7 @@ private fun SessionTodoPane(
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            items(session.children.filter { it.checked != null }) { model ->
+            items(todoItems) { model ->
                 TodoRow(
                     title = model.content,
                     subtitle = null,
@@ -511,6 +525,7 @@ private fun SessionChatPane(
 ) {
     var instructionValue by remember { mutableStateOf(TextFieldValue()) }
     val isEnabled = session.shoakuId != null
+    val messages = session.messages.orEmpty()
     SessionSectionCard(
         title = "Chat",
         modifier = Modifier.fillMaxSize()
@@ -522,7 +537,7 @@ private fun SessionChatPane(
             )
         }
 
-        if (session.messages?.isEmpty() ?: true) {
+        if (messages.isEmpty()) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -540,8 +555,8 @@ private fun SessionChatPane(
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 4.dp)
             ) {
-                itemsIndexed(session.messages) { index, entry ->
-                    val previousEntry = session.messages.getOrNull(index - 1)
+                itemsIndexed(messages) { index, entry ->
+                    val previousEntry = messages.getOrNull(index - 1)
                     val previousIsSameSpeaker = previousEntry?.type == entry.type && previousEntry.command == null && entry.command == null
 
                     ChatEntryRow(
@@ -564,7 +579,9 @@ private fun SessionChatPane(
                     instruction = instructionValue.text
                 )
                 instructionValue = TextFieldValue()
-            }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
         )
     }
 }
@@ -575,6 +592,7 @@ private fun TokenUsageCard(
     modifier: Modifier = Modifier
 ) {
     var maxTokens by remember(tokenUsage.maxTokens) { mutableStateOf(tokenUsage.maxTokens.coerceAtLeast(1)) }
+    var addButtonHovered by remember { mutableStateOf(false) }
     val navigatorTokens = tokenUsage.navigatorTokens.coerceAtLeast(0)
     val explorerTokens = tokenUsage.explorerTokens.coerceAtLeast(0)
     val totalTokens = navigatorTokens + explorerTokens
@@ -609,11 +627,25 @@ private fun TokenUsageCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${formatTokenCount(totalTokens)} / ${formatTokenCount(maxTokens)}",
-                    color = TodoColors.secondaryText,
+                    text = buildAnnotatedString {
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.secondaryText)) {
+                            append(formatTokenCount(totalTokens))
+                        }
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.secondaryText)) {
+                            append(" / ")
+                        }
+                        withStyle(
+                            androidx.compose.ui.text.SpanStyle(
+                                color = if (addButtonHovered) TodoColors.primaryText else TodoColors.secondaryText
+                            )
+                        ) {
+                            append(formatTokenCount(maxTokens))
+                        }
+                    },
                     fontSize = 11.sp
                 )
                 CompactAddButton(
+                    onHoverChange = { addButtonHovered = it },
                     onClick = {
                         val increment = (maxTokens / 10f).toInt().coerceAtLeast(1)
                         maxTokens += increment
@@ -685,6 +717,7 @@ private fun TokenLegendItem(
 
 @Composable
 private fun CompactAddButton(
+    onHoverChange: (Boolean) -> Unit = {},
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -694,6 +727,10 @@ private fun CompactAddButton(
         pressed -> TodoColors.tokenUsageButtonPressed
         hovered -> TodoColors.tokenUsageButtonHover
         else -> TodoColors.tokenUsageButtonSurface
+    }
+
+    LaunchedEffect(hovered) {
+        onHoverChange(hovered)
     }
 
     Box(
@@ -724,11 +761,12 @@ private fun ChatComposer(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     enabled: Boolean,
-    onSend: () -> Unit
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val canSend = enabled && value.text.isNotBlank()
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clipToBounds(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -923,15 +961,17 @@ private fun ScrollHintLazyColumn(
         ) {
             Box(
                 modifier = Modifier
+                    .size(28.dp)
                     .clip(RoundedCornerShape(999.dp))
                     .background(TodoColors.scrollHintSurface)
                     .border(1.dp, TodoColors.scrollHintBorder, RoundedCornerShape(999.dp))
-                    .padding(horizontal = 7.dp, vertical = 2.dp)
+                    .padding(bottom = 1.dp),
+                contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = "↓",
                     color = TodoColors.scrollHintContent,
-                    fontSize = 12.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold
                 )
             }
