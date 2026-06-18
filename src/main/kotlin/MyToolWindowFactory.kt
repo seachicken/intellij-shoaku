@@ -316,28 +316,39 @@ private fun SessionListContent(
         }
 
         if (sessions.isEmpty()) {
-            Box(
-                modifier = modifier,
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No goals")
-            }
+            EmptyState(
+                text = "No goals",
+                modifier = modifier
+            )
             return
         }
 
         val listState = rememberLazyListState()
+        val activeSessionIndex = sessions.indexOfFirst { it.checked == false }
+
+        LaunchedEffect(sessions) {
+            if (sessions.isEmpty()) {
+                return@LaunchedEffect
+            }
+
+            val targetIndex = if (activeSessionIndex >= 0) activeSessionIndex else sessions.lastIndex
+            listState.animateScrollToItem(targetIndex)
+        }
+
         ScrollHintLazyColumn(
             state = listState,
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             itemsIndexed(sessions) { index, session ->
-                val activeChild = session.children.firstOrNull { it.checked == false }
+                val todoItems = session.children.filter { it.checked != null }
+                val activeChild = todoItems.firstOrNull { it.checked == false }
                 TodoRow(
                     title = session.content,
-                    meta = "#${index + 1}",
-                    subtitle = activeChild?.status?.takeIf { it.isNotBlank() } ?: "${session.children.size} items",
+                    meta = null,
+                    subtitle = activeChild?.status?.takeIf { it.isNotBlank() } ?: "${todoItems.size} tasks",
                     completed = session.checked ?: false,
+                    compact = true,
                     hoverable = true,
                     onClick = { onOpenSession(session) }
                 )
@@ -474,6 +485,16 @@ private fun SessionTodoPane(
         },
         modifier = Modifier.fillMaxSize()
     ) {
+        if (todoItems.isEmpty()) {
+            EmptyState(
+                text = "No tasks yet",
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            )
+            return@SessionSectionCard
+        }
+
         val listState = rememberLazyListState()
         val activeItemIndex = todoItems.indexOfFirst { it.checked == false }
 
@@ -572,14 +593,12 @@ private fun SessionChatPane(
         modifier = Modifier.fillMaxSize()
     ) {
         if (messages.isEmpty()) {
-            Box(
+            EmptyState(
+                text = "No messages yet",
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("No messages yet", color = TodoColors.secondaryText)
-            }
+                    .fillMaxWidth()
+            )
         } else {
             val listState = rememberLazyListState()
             ScrollHintLazyColumn(
@@ -1090,6 +1109,23 @@ private fun SessionSectionHeader(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
             content = trailing
+        )
+    }
+}
+
+@Composable
+private fun EmptyState(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            fontSize = 12.sp,
+            color = TodoColors.secondaryText
         )
     }
 }
