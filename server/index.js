@@ -68,10 +68,8 @@ appServer.stdout.on('data', (chunk) => {
           break;
         }
 
-        logWarn(`id: ${shoakuId}, chatby: ${JSON.stringify(chatByShoakuId.get(shoakuId))}`)
         const usage = chatByShoakuId.get(shoakuId).tokenUsage;
         const session = shoakuToSession.get(shoakuId);
-        logWarn(`Token usage updated for shoakuId ${shoakuId}, threadId ${message.params.threadId}. navigatorTokens: ${usage.navigatorTokens}, explorerTokens: ${usage.explorerTokens}`);
         if (message.params.threadId === session.navigatorThreadId) {
           usage.navigatorTokens = message.params.tokenUsage.total.totalTokens;
         } else {
@@ -410,36 +408,66 @@ process.stdin.on('data', async (chunk) => {
           goalInputBuilder.onAgentInput(async (input) => {
             logWarn(`debounce goal input: ${JSON.stringify(input)}`);
             if (input?.shoakuId) {
-              startTurn({
-                threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
-                input: [
-                  {
-                    type: 'text',
-                    text: `Regarding ${input.content}, Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
-                  }
-                ]}, {
-                  onItemCompleted: async (id, params) => {
-                    if (params.item.type !== 'agentMessage') {
-                      return;
+              const task = findActiveItem(input?.children ?? []);
+              if (task) {
+                startTurn({
+                  threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+                  input: [
+                    {
+                      type: 'text',
+                      text: `Regarding ${input.content}, Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
                     }
+                  ]}, {
+                    onItemCompleted: async (id, params) => {
+                      if (params.item.type !== 'agentMessage') {
+                        return;
+                      }
 
-                    logWarn(`goal summary. new: ${params.item.text}, old: ${goalByShoakuId.get(activeGoalItem.shoakuId)}`);
-                    if (params.item.text) {
-                      logWarn('update goal summary')
-                      startTurn({
-                        threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
-                        input: [
-                          {
-                            type: 'text',
-                            text: `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
-                          }
-                        ]}
-                      );
-                      goalByShoakuId.set(input.shoakuId, params.item.text);
+                      logWarn(`goal summary. new: ${params.item.text}, old: ${goalByShoakuId.get(activeGoalItem.shoakuId)}`);
+                      if (params.item.text) {
+                        logWarn('update goal summary')
+                        startTurn({
+                          threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
+                          input: [
+                            {
+                              type: 'text',
+                              text: `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+                            }
+                          ]}
+                        );
+                        goalByShoakuId.set(input.shoakuId, params.item.text);
+                      }
                     }
                   }
-                }
-              );
+                );
+              } else {
+                logWarn(`think next task`);
+                startTurn({
+                  threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+                  input: [
+                    {
+                      type: 'text',
+                      text: `Regarding ${input.content}, Please think of a good task to do next.`
+                    }
+                  ]}, {
+                    onItemCompleted: async (id, params) => {
+                      if (params.item.type === 'userMessage' ||
+                          (params.item.type === 'agentMessage' && !params.item.text)) {
+                        return;
+                      }
+
+                      chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.push({
+                        turnId: params.turnId,
+                        type: params.item.type,
+                        text: params.item.text ||
+                          params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
+                        command: params.item.command
+                      });
+                      syncShoakuLists(initializeParams.initializationOptions.filePath);
+                    }
+                  }
+                );
+              }
             }
           });
 
@@ -524,7 +552,7 @@ process.stdin.on('data', async (chunk) => {
               }
             }
           } catch (err) {
-            logError(`Error watching file: ${err.message}`);
+            logError(`Error watching file: ${err}`);
           }
           break;
 

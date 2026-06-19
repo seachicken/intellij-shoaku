@@ -443,7 +443,6 @@ private fun SessionDetailSplitter(
             secondComponent = JewelComposePanel {
                 SessionChatPane(
                     session = sessionState.value,
-                    filePath = filePathState.value,
                     viewModel = viewModelState.value,
                     project = projectState.value
                 )
@@ -504,16 +503,6 @@ private fun SessionTodoPane(
         },
         modifier = Modifier.fillMaxSize()
     ) {
-        if (todoItems.isEmpty()) {
-            EmptyState(
-                text = "-",
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            )
-            return@SessionSectionCard
-        }
-
         val listState = rememberLazyListState()
         val activeItemIndex = todoItems.indexOfFirst { it.checked == false }
 
@@ -581,7 +570,6 @@ private fun SessionTodoPane(
 @Composable
 private fun SessionChatPane(
     session: Item,
-    filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?
 ) {
@@ -612,32 +600,24 @@ private fun SessionChatPane(
         },
         modifier = Modifier.fillMaxSize()
     ) {
-        if (messages.isEmpty()) {
-            ChatEmptyState(
-                filePath = filePath,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            )
-        } else {
-            val listState = rememberLazyListState()
-            ScrollHintLazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 4.dp)
-            ) {
-                itemsIndexed(messages) { index, entry ->
-                    val previousEntry = messages.getOrNull(index - 1)
-                    val previousIsSameSpeaker = previousEntry?.type == entry.type && previousEntry.command == null && entry.command == null
+        val listState = rememberLazyListState()
+        ScrollHintLazyColumn(
+            state = listState,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(bottom = 4.dp)
+        ) {
+            itemsIndexed(messages) { index, entry ->
+                val previousEntry = messages.getOrNull(index - 1)
+                val previousIsSameSpeaker =
+                    previousEntry?.type == entry.type && previousEntry.command == null && entry.command == null
 
-                    ChatEntryRow(
-                        entry = entry,
-                        isFirstInGroup = !previousIsSameSpeaker,
-                        topSpacing = if (previousIsSameSpeaker) 4.dp else 10.dp
-                    )
-                }
+                ChatEntryRow(
+                    entry = entry,
+                    isFirstInGroup = !previousIsSameSpeaker,
+                    topSpacing = if (previousIsSameSpeaker) 4.dp else 10.dp
+                )
             }
         }
 
@@ -1141,26 +1121,6 @@ private fun SessionSectionHeader(
 }
 
 @Composable
-private fun EmptyState(
-    text: String,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(12.dp),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Text(
-            text = text,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            color = TodoColors.secondaryText
-        )
-    }
-}
-
-@Composable
 private fun GoalsEmptyState(
     modifier: Modifier = Modifier
 ) {
@@ -1216,56 +1176,6 @@ private fun GoalsEmptyState(
             )
             Text(
                 text = EmptyGoalsSample,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                color = TodoColors.secondaryText
-            )
-        }
-    }
-}
-
-@Composable
-private fun ChatEmptyState(
-    filePath: String,
-    modifier: Modifier = Modifier
-) {
-    val sampleShape = RoundedCornerShape(12.dp)
-    val markdownFileName = filePath
-        .substringAfterLast('/')
-        .ifBlank { DefaultMarkdownFileName }
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            text = "No chat yet",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TodoColors.secondaryText
-        )
-        Text(
-            text = "Add a task to $markdownFileName and start development.",
-            fontSize = 12.sp,
-            color = TodoColors.secondaryText
-        )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(TodoColors.textFieldSurface, sampleShape)
-                .border(1.dp, TodoColors.composerFocusBorder.copy(alpha = 0.7f), sampleShape)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = "Add this to $markdownFileName",
-                fontSize = 12.sp,
-                color = TodoColors.secondaryText
-            )
-            Text(
-                text = ChatEmptySample.replace(DefaultMarkdownFileName, markdownFileName),
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
                 color = TodoColors.secondaryText
@@ -1700,7 +1610,6 @@ private object TodoColors {
     private val hoverBackground = namedColor("List.hoverBackground", 0xFF2D4366, 0xFFEAF2FF)
     private val userMessageBlue = namedColor("Actions.Blue", 0xFF1849C6, 0xFF3574F0)
     private val infoBackground = namedColor("Component.infoBackground", 0xFF24324A, 0xFFF3F7FF)
-    val textFieldSurface = namedColor("TextField.background", 0xFF2B2D30, 0xFFFFFFFF)
     val primaryText = namedColor("Label.foreground", 0xFFE6EDF3, 0xFF1F2328)
     val secondaryText = namedColor("Label.infoForeground", 0xFF9DA7B3, 0xFF667281)
     val popupSecondaryText = blend(primaryText, secondaryText, 0.55f)
