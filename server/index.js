@@ -26,8 +26,8 @@ const goalByShoakuId = new Map();
 
 let config;
 let initializeParams;
-let agentInputbuilder;
-let goalInputbuilder;
+let lspInputBuilder;
+let goalInputBuilder;
 let lists = [];
 let activeGoalItem;
 let prevGoalItem;
@@ -220,7 +220,7 @@ async function startNewSession(goalItem) {
     input: [
       {
         type: "text",
-        text: `My goal is ${goalItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}`
+        text: `My goal is ${goalItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}\nPlease return all subsequent responses in the language of the list.`
       }
     ]}, {
       onItemCompleted: (id, params) => {
@@ -333,8 +333,8 @@ process.stdin.on('data', async (chunk) => {
       }
       logInfo(`LC-> ${JSON.stringify(message)}`)
 
-      if (agentInputbuilder) {
-        agentInputbuilder.ingest({
+      if (lspInputBuilder) {
+        lspInputBuilder.ingest({
           type: inputType.LSP,
           content: message
         });
@@ -346,7 +346,7 @@ process.stdin.on('data', async (chunk) => {
           await mkdir(sessionsDir, { recursive: true });
           const data = `
 ---
-defaultTokenBudget: 10000000
+defaultTokenBudget: 1000000
 `.trimStart();
           await writeFile(join(shoakuDir, 'config.yaml'), data, { flag: "wx" }).catch((e) => {
             if (e.code !== 'EEXIST') {
@@ -360,26 +360,41 @@ defaultTokenBudget: 10000000
           activeGoalItem = findActiveParentItem(lists);
           logWarn(`Initialization params: ${JSON.stringify(initializeParams)}, active goal item: ${JSON.stringify(activeGoalItem)}`);
 
-          agentInputbuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
-          agentInputbuilder.onAgentInput(async (input) => {
+          const metaData = await readFile(join(sessionsDir, activeGoalItem.shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
+          lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
+          lspInputBuilder.onAgentInput(async (input) => {
             if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
               logWarn(`No active goal item with shoakuId found, skipping didSave event processing. item: ${JSON.stringify(activeGoalItem)}`);
               return;
             }
 
-            //const metaData = await readFile(join(sessionsDir, activeGoalItem.shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
-            //const { stdout } = await exec(`git -C ${initializeParams.rootPath} diff ${metaData.temporaryWorkspace} --`);
-            //logWarn(`diffResult: ${stdout}`);
+            await sendAppRequest('thread/inject_items', {
+              threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
+              items: [
+                {
+                  type: 'message',
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'output_text',
+                      text: input
+                    }
+                  ]
+                }
+              ]
+            });
+
             startTurn({
               threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
               input: [
                 {
-                  type: "text",
-                  text: input
+                  type: 'text',
+                  text: 'Do you have any advice regarding the code you are currently editing to accomplish the task?'
                 }
               ]}, {
                 onItemCompleted: async (id, params) => {
-                  if (params.item.type !== 'agentMessage') {
+                  if (params.item.type === 'userMessage' ||
+                      (params.item.type === 'agentMessage' && !params.item.text)) {
                     return;
                   }
 
@@ -396,8 +411,8 @@ defaultTokenBudget: 10000000
             );
           });
 
-          goalInputbuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
-          goalInputbuilder.onAgentInput(async (input) => {
+          goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
+          goalInputBuilder.onAgentInput(async (input) => {
             logWarn(`debounce goal input: ${JSON.stringify(input)}`);
             if (input?.shoakuId) {
               startTurn({
@@ -457,8 +472,8 @@ defaultTokenBudget: 10000000
             for await (const event of watch(initializeParams.initializationOptions.filePath)) {
               await syncShoakuLists(initializeParams.initializationOptions.filePath);
               activeGoalItem = findActiveParentItem(lists);
-              if (goalInputbuilder) {
-                goalInputbuilder.ingest({
+              if (goalInputBuilder) {
+                goalInputBuilder.ingest({
                   type: inputType.GOAL,
                   content: activeGoalItem
                 });

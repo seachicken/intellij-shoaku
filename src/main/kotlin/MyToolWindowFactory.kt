@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isShiftPressed
@@ -92,6 +93,24 @@ class MyToolWindowFactory : ToolWindowFactory {
 }
 
 private val ChatSendIconKey = PathIconKey("/icons/send/send.svg", MyToolWindowFactory::class.java)
+private val EmptyGoalsIntro = "Select a Markdown file to load Shoaku goals."
+private val EmptyGoalsSample = """
+# {plan}.md
+
+- [ ] Implement login screen [shoaku]
+  - Define the API contract
+  - Build the UI
+  - Add tests
+
+Use a `.md` file in Markdown File and add `[shoaku]` to the goal item.
+""".trimIndent()
+private const val DefaultMarkdownFileName = "{todo}.md"
+private val ChatEmptySample = """
+# {plan}.md
+
+- [ ] Implement login screen [shoaku]
+  - [ ] Define the API contract
+""".trimIndent()
 
 @Composable
 private fun MyToolWindowContent(
@@ -305,7 +324,7 @@ private fun SessionListContent(
             )
             OutlinedButton(onClick = {
                 if (project != null) {
-                    val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor()
+                    val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor("md")
                     FileChooser.chooseFile(descriptor, project, null) { virtualFile ->
                         filePathState.setTextAndPlaceCursorAtEnd(virtualFile.path)
                     }
@@ -316,8 +335,7 @@ private fun SessionListContent(
         }
 
         if (sessions.isEmpty()) {
-            EmptyState(
-                text = "No goals",
+            GoalsEmptyState(
                 modifier = modifier
             )
             return
@@ -425,6 +443,7 @@ private fun SessionDetailSplitter(
             secondComponent = JewelComposePanel {
                 SessionChatPane(
                     session = sessionState.value,
+                    filePath = filePathState.value,
                     viewModel = viewModelState.value,
                     project = projectState.value
                 )
@@ -562,6 +581,7 @@ private fun SessionTodoPane(
 @Composable
 private fun SessionChatPane(
     session: Item,
+    filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?
 ) {
@@ -593,8 +613,8 @@ private fun SessionChatPane(
         modifier = Modifier.fillMaxSize()
     ) {
         if (messages.isEmpty()) {
-            EmptyState(
-                text = "No messages yet",
+            ChatEmptyState(
+                filePath = filePath,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
@@ -795,15 +815,15 @@ private fun TokenUsageCard(
             ) {
                 Text(
                     text = buildAnnotatedString {
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.secondaryText)) {
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
                             append(formatTokenCount(totalTokens))
                         }
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.secondaryText)) {
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
                             append(" / ")
                         }
                         withStyle(
                             androidx.compose.ui.text.SpanStyle(
-                                color = if (addButtonHovered) TodoColors.primaryText else TodoColors.secondaryText
+                                color = if (addButtonHovered) TodoColors.primaryText else TodoColors.popupSecondaryText
                             )
                         ) {
                             append(formatTokenCount(maxTokens))
@@ -873,7 +893,7 @@ private fun TokenLegendItem(
         )
         Text(
             text = label,
-            color = TodoColors.secondaryText,
+            color = TodoColors.popupSecondaryText,
             fontSize = 11.sp
         )
     }
@@ -929,6 +949,8 @@ private fun ChatComposer(
     modifier: Modifier = Modifier
 ) {
     val canSend = enabled && value.text.isNotBlank()
+    var isFocused by remember { mutableStateOf(false) }
+    val composerShape = RoundedCornerShape(16.dp)
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -938,9 +960,13 @@ private fun ChatComposer(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(composerShape)
                 .background(TodoColors.composerSurface)
-                .border(1.dp, TodoColors.composerBorder, RoundedCornerShape(16.dp))
+                .border(
+                    1.dp,
+                    if (isFocused) TodoColors.composerFocusBorder else TodoColors.composerBorder,
+                    composerShape
+                )
                 .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
             BasicTextField(
@@ -950,6 +976,7 @@ private fun ChatComposer(
                     .fillMaxWidth()
                     .padding(end = 42.dp)
                     .defaultMinSize(minHeight = 52.dp)
+                    .onFocusChanged { isFocused = it.isFocused }
                     .onPreviewKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
                             if (event.isShiftPressed) {
@@ -1119,14 +1146,131 @@ private fun EmptyState(
     modifier: Modifier = Modifier
 ) {
     Box(
-        modifier = modifier,
-        contentAlignment = Alignment.Center
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        contentAlignment = Alignment.CenterStart
     ) {
         Text(
             text = text,
             fontSize = 12.sp,
+            fontFamily = FontFamily.Monospace,
             color = TodoColors.secondaryText
         )
+    }
+}
+
+@Composable
+private fun GoalsEmptyState(
+    modifier: Modifier = Modifier
+) {
+    val sampleShape = RoundedCornerShape(10.dp)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "No goals loaded",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = TodoColors.secondaryText
+        )
+        Text(
+            text = EmptyGoalsIntro,
+            fontSize = 12.sp,
+            color = TodoColors.secondaryText
+        )
+        InfoCard(title = "How to use it") {
+            Text(
+                text = "1. Choose a `.md` file in Markdown File.",
+                fontSize = 12.sp,
+                color = TodoColors.secondaryText
+            )
+            Text(
+                text = "2. Add `[shoaku]` to any goal item you want Shoaku to manage.",
+                fontSize = 12.sp,
+                color = TodoColors.secondaryText
+            )
+            Text(
+                text = "3. Use nested bullets for subtasks if needed.",
+                fontSize = 12.sp,
+                color = TodoColors.secondaryText
+            )
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(TodoColors.codeBlockSurface, sampleShape)
+                .border(1.dp, TodoColors.codeBlockBorder, sampleShape)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Example",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                color = TodoColors.secondaryText
+            )
+            Text(
+                text = EmptyGoalsSample,
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = TodoColors.secondaryText
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatEmptyState(
+    filePath: String,
+    modifier: Modifier = Modifier
+) {
+    val sampleShape = RoundedCornerShape(12.dp)
+    val markdownFileName = filePath
+        .substringAfterLast('/')
+        .ifBlank { DefaultMarkdownFileName }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "No chat yet",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = TodoColors.secondaryText
+        )
+        Text(
+            text = "Add a task to $markdownFileName and start development.",
+            fontSize = 12.sp,
+            color = TodoColors.secondaryText
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(TodoColors.textFieldSurface, sampleShape)
+                .border(1.dp, TodoColors.composerFocusBorder.copy(alpha = 0.7f), sampleShape)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = "Add this to $markdownFileName",
+                fontSize = 12.sp,
+                color = TodoColors.secondaryText
+            )
+            Text(
+                text = ChatEmptySample.replace(DefaultMarkdownFileName, markdownFileName),
+                fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
+                color = TodoColors.secondaryText
+            )
+        }
     }
 }
 
@@ -1552,11 +1696,14 @@ private object TodoColors {
     private val panelBackground = namedColor("Panel.background", 0xFF1F2329, 0xFFF7F8FA)
     private val listBackground = namedColor("List.background", 0xFF262B33, 0xFFFFFFFF)
     private val componentBorder = namedColor("Component.borderColor", 0xFF4B5263, 0xFFC5CDD8)
+    private val focusedBorder = namedColor("TabbedPane.focusColor", 0xFF4C9AFF, 0xFF4C9AFF)
     private val hoverBackground = namedColor("List.hoverBackground", 0xFF2D4366, 0xFFEAF2FF)
     private val userMessageBlue = namedColor("Actions.Blue", 0xFF1849C6, 0xFF3574F0)
     private val infoBackground = namedColor("Component.infoBackground", 0xFF24324A, 0xFFF3F7FF)
+    val textFieldSurface = namedColor("TextField.background", 0xFF2B2D30, 0xFFFFFFFF)
     val primaryText = namedColor("Label.foreground", 0xFFE6EDF3, 0xFF1F2328)
     val secondaryText = namedColor("Label.infoForeground", 0xFF9DA7B3, 0xFF667281)
+    val popupSecondaryText = blend(primaryText, secondaryText, 0.55f)
     val completedText = secondaryText.copy(alpha = 0.9f)
     val infoSurface = blend(panelBackground, listBackground, 0.9f)
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
@@ -1564,12 +1711,13 @@ private object TodoColors {
     val popupSurface = overlay(infoBackground.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.62f))
     val popupBorder = componentBorder.copy(alpha = 0.9f)
     val agentMessageDivider = componentBorder.copy(alpha = 0.54f)
-    val codeBlockSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.5f))
-    val codeBlockBorder = componentBorder.copy(alpha = 0.72f)
+    val codeBlockSurface = namedColor("Editor.background", 0xFF1E1F22, 0xFF1E1F22)
+    val codeBlockBorder = componentBorder.copy(alpha = 0.45f)
     val userMessageSurface = overlay(userMessageBlue.copy(alpha = 0.78f), blend(listBackground, panelBackground, 0.16f))
     val userMessageText = namedColor("TextArea.foreground", 0xFFF4F8FF, 0xFF17375E)
     val composerSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.28f))
     val composerBorder = componentBorder.copy(alpha = 0.82f)
+    val composerFocusBorder = focusedBorder
     val composerSendSurface = overlay(userMessageBlue.copy(alpha = 0.88f), blend(listBackground, panelBackground, 0.12f))
     val scrollHintSurface = overlay(userMessageBlue.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.4f))
     val scrollHintBorder = componentBorder.copy(alpha = 0.68f)
