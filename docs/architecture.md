@@ -13,7 +13,7 @@ graph TD
     explorer[explorer thread]
   end
 
-  shoaku-server -- read/write --> todo[("{goal}.md")]
+  shoaku-server -- read/write --> todo[("{plan}.md")]
   IDE <-- LSP --> shoaku-server -- <a href='https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md'>ASP</a> --> codex
   shoaku-server -- "git worktree add" --> worktree-files
   navigator -- read --> project-files
