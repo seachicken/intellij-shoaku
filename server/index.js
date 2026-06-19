@@ -512,20 +512,36 @@ process.stdin.on('data', async (chunk) => {
               if (prevGoalItem?.checked === false && prevGoalItem.shoakuId) {
                 const currentGoalItem = findItemByShoakuId(lists, prevGoalItem.shoakuId);
                 if (currentGoalItem && currentGoalItem.shoakuId === prevGoalItem?.shoakuId && currentGoalItem.checked && !prevGoalItem.checked) {
-                  const sessionId = shoakuToSession.get(currentGoalItem.shoakuId).navigatorThreadId;
-                  if (!sessionId) {
+                  const navigatorThreadId = shoakuToSession.get(currentGoalItem.shoakuId).navigatorThreadId;
+                  if (!navigatorThreadId) {
                     logError(`No active session found for shoakuId ${currentGoalItem.shoakuId}`);
                     return;
                   }
 
                   await startTurn({
-                    threadId: sessionId,
+                    threadId: navigatorThreadId,
                     input: [
                       {
                         type: 'text',
-                        text: `Regarding ${currentGoalItem?.content}, summarize only the conversations that will be useful in the future, listing them as bullet points.`
+                        text: [
+                          'Summarize the threads according to the following:',
+                          '- Prioritize keeping decisions made only within the thread.',
+                          '- Summarize into about three points; if there are no key points, omit them.',
+                        ].join('\n')
                       }
-                    ]}, {
+                    ],
+                    outputSchema: {
+                      type: 'object',
+                      properties: {
+                        summary: {
+                          type: 'array',
+                          items: { type: 'string' }
+                        }
+                      },
+                      required: [ 'summary' ],
+                      additionalProperties: false
+                    }
+                  }, {
                       onItemCompleted: async (id, params) => {
                         if (params.item.type !== 'agentMessage') {
                           return;
@@ -573,14 +589,14 @@ process.stdin.on('data', async (chunk) => {
           break;
 
         case 'shoaku/reply':
-          const sessionId = shoakuToSession.get(message.params.shoakuId).navigatorThreadId;
-          if (!sessionId) {
+          const navigatorThreadId = shoakuToSession.get(message.params.shoakuId).navigatorThreadId;
+          if (!navigatorThreadId) {
             logWarn(`No active session found for shoakuId ${message.params.shoakuId}`);
             break;
           }
 
           await startTurn({
-            threadId: sessionId,
+            threadId: navigatorThreadId,
             input: [
               {
                 type: 'text',

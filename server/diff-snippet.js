@@ -42,7 +42,7 @@ export function renderSummaryDiff(content, shoakuId, summary, { operator = '+', 
     insertIndent = parentIndent + 2;
   }
 
-  const summaryLines = summary.split('\n').map(line => `${operator}${indentChar.repeat(insertIndent)}${line}`);
+  const summaryLines = JSON.parse(summary).summary.map(line => `${operator}${indentChar.repeat(insertIndent)}- ${line} by AI`);
   lines.splice(insertLine + 1, 0, ...summaryLines);
 
   if (unified == null) {
