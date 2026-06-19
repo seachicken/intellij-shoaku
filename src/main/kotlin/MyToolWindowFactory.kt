@@ -94,23 +94,11 @@ class MyToolWindowFactory : ToolWindowFactory {
 }
 
 private val ChatSendIconKey = PathIconKey("/icons/send/send.svg", MyToolWindowFactory::class.java)
-private val EmptyGoalsIntro = "Select a Markdown file to load Shoaku goals."
 private val EmptyGoalsSample = """
-# {plan}.md
-
-- [ ] Implement login screen [shoaku]
-  - Define the API contract
-  - Build the UI
-  - Add tests
-
-Use a `.md` file in Markdown File and add `[shoaku]` to the goal item.
-""".trimIndent()
-private const val DefaultMarkdownFileName = "{todo}.md"
-private val ChatEmptySample = """
-# {plan}.md
-
-- [ ] Implement login screen [shoaku]
-  - [ ] Define the API contract
+- [ ] Fix errors with large item counts [shoaku]
+  - [ ] Reproduce the issue
+  - [ ] Identify the root cause
+  - [ ] Add regression tests
 """.trimIndent()
 
 @Composable
@@ -1132,30 +1120,14 @@ private fun GoalsEmptyState(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "No goals loaded",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TodoColors.secondaryText
-        )
-        Text(
-            text = EmptyGoalsIntro,
-            fontSize = 12.sp,
-            color = TodoColors.secondaryText
-        )
-        InfoCard(title = "How to use it") {
+        InfoCard(title = "How it works") {
             Text(
-                text = "1. Choose a `.md` file in Markdown File.",
+                text = "1. Choose a `.md` file in Goals file.",
                 fontSize = 12.sp,
                 color = TodoColors.secondaryText
             )
             Text(
-                text = "2. Add `[shoaku]` to any goal item you want Shoaku to manage.",
-                fontSize = 12.sp,
-                color = TodoColors.secondaryText
-            )
-            Text(
-                text = "3. Use nested bullets for subtasks if needed.",
+                text = "2. Add `[shoaku]` to any goal you want Shoaku to investigate and implement.",
                 fontSize = 12.sp,
                 color = TodoColors.secondaryText
             )
@@ -1733,8 +1705,8 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             "aaa",
             checked = false,
             children = listOf(
-                Item("text", "aaa-1", checked = true, status = "Done"),
-                Item("text", "aaa-2", checked = false, status = "In Progress"),
+                Item("text", "aaa-1", checked = true),
+                Item("text", "aaa-2", checked = false),
             ),
             messages = listOf(
                 Message(type = "commandExecution", command = "file read"),
