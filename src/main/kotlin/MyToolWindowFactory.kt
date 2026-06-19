@@ -32,6 +32,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
@@ -657,9 +658,8 @@ private fun TokenUsageIndicator(
         }
     }
     val indicatorColor = when {
-        usageFraction >= 0.9f -> TodoColors.explorerTokenUsage
-        usageFraction >= 0.7f -> TodoColors.navigatorTokenUsage
-        tokenUsage == null -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.7f)
+        tokenUsage != null -> TodoColors.tokenUsageIndicator(usageFraction)
+        true -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.7f)
         else -> TodoColors.scrollHintContent
     }
     val chipBackground = when {
@@ -1635,11 +1635,22 @@ private object TodoColors {
     val tokenUsageTrackBorder = componentBorder.copy(alpha = 0.62f)
     val navigatorTokenUsage = namedColor("Actions.Blue", 0xFF3574F0, 0xFF3574F0)
     val explorerTokenUsage = namedColor("Actions.Green", 0xFF4FAF6B, 0xFF3D9B58)
+    private val tokenUsageNeutral = namedColor("Label.disabledForeground", 0xFFC9D1D9, 0xFFB8C1CC)
+    private val tokenUsageWarning = namedColor("Actions.Yellow", 0xFFE2A93B, 0xFFB26A00)
+    private val tokenUsageDanger = namedColor("Actions.Red", 0xFFE05555, 0xFFC75450)
     val tokenUsageButtonSurface = overlay(userMessageBlue.copy(alpha = 0.2f), blend(listBackground, panelBackground, 0.46f))
     val tokenUsageButtonHover = overlay(userMessageBlue.copy(alpha = 0.3f), blend(listBackground, panelBackground, 0.36f))
     val tokenUsageButtonPressed = overlay(userMessageBlue.copy(alpha = 0.42f), blend(listBackground, panelBackground, 0.28f))
     val tokenUsageButtonBorder = overlay(userMessageBlue.copy(alpha = 0.34f), componentBorder.copy(alpha = 0.92f))
     val tokenUsageButtonContent = namedColor("Label.foreground", 0xFFF2F7FF, 0xFF17375E)
+
+    fun tokenUsageIndicator(usageFraction: Float): Color {
+        val clampedFraction = usageFraction.coerceIn(0f, 1f)
+        return when {
+            clampedFraction <= 0.7f -> lerp(tokenUsageNeutral, tokenUsageWarning, clampedFraction / 0.7f)
+            else -> lerp(tokenUsageWarning, tokenUsageDanger, (clampedFraction - 0.7f) / 0.3f)
+        }
+    }
 
     fun defaultCard() = TodoCardColors(
         background = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.44f)),
