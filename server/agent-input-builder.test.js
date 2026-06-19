@@ -54,10 +54,10 @@ describe('AgentInputBuilder', () => {
     builder.onAgentInput((input) => {
       assert.strictEqual(
         input,
-        `
-Driver operations:
-- Changed Main.java around line 0
-        `.trim()
+        [
+          'Driver operations:',
+          '- Changed Main.java around line 0'
+        ].join('\n')
       );
       setImmediate(done);
     });

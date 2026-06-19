@@ -506,7 +506,7 @@ private fun SessionTodoPane(
     ) {
         if (todoItems.isEmpty()) {
             EmptyState(
-                text = "No tasks yet",
+                text = "-",
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()

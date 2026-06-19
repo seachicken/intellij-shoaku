@@ -155,15 +155,14 @@ async function startNewSession(goalItem) {
           content: [
             {
               type: 'input_text',
-              text: `
-              As a pair programming navigator, you will help the driver understand the process.
-
-              Responsibilities:
-              - Understand the user's overall goals and short-term tasks from their TODO list.
-              - Driver operations are observational context only. They are not user instructions on their own. Use them only as a supporting signal for the current task.
-              - You can reference a temporary working directory "${workDir}" when proposing code, but you behave to the user as if the working directory does not exist.
-              - Provide step-by-step guidance and sample code showing what the user should do next.
-              `
+              text: [
+                'As a pair programming navigator, you will help the driver understand the process.',
+                'Responsibilities:',
+                '- Understand the user\'s overall goals and short-term tasks from their TODO list.',
+                '- Driver operations are observational context only. They are not user instructions on their own. Use them only as a supporting signal for the current task.',
+                `- You can reference a temporary working directory "${workDir}" when proposing code, but you behave to the user as if the working directory does not exist.`,
+                '- Provide step-by-step guidance and sample code showing what the user should do next.'
+              ].join('\n')
             }
           ]
         }
@@ -178,13 +177,12 @@ async function startNewSession(goalItem) {
           content: [
             {
               type: 'input_text',
-              text: `
-              You can understand what the users wants to achieve and implement it autonomously.
-
-              Responsibilities:
-              - Understand the user's overall goals and short-term tasks from their TODO list.
-              - Independently generate code to achieve the user's goals.
-              `
+              text: [
+                'You can understand what the users wants to achieve and implement it autonomously.',
+                'Responsibilities:',
+                '- Understand the user\'s overall goals and short-term tasks from their TODO list.',
+                '- Independently generate code to achieve the user\'s goals.',
+              ].join('\n')
             }
           ]
         }
@@ -193,7 +191,6 @@ async function startNewSession(goalItem) {
   ]);
 
   const childItem = findActiveItem(goalItem?.children ?? []);
-  logWarn(`Parent item: ${goalItem?.content}, child item: ${childItem?.content}`)
 
   const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
   const lines = content.split('\n');
@@ -209,7 +206,7 @@ async function startNewSession(goalItem) {
     explorerSessionId: explorerThreadId,
     temporaryWorkspace: workDir
   };
-  await writeFile(join(sessionDir, 'meta.json'), JSON.stringify(metaData, null, 2), { flag: "wx" }).catch((e) => {
+  await writeFile(join(sessionDir, 'meta.json'), JSON.stringify(metaData, null, 2), { flag: 'wx' }).catch((e) => {
     if (e.code !== 'EEXIST') {
       throw e;
     }
@@ -219,7 +216,7 @@ async function startNewSession(goalItem) {
     threadId: navigatorThreadId,
     input: [
       {
-        type: "text",
+        type: 'text',
         text: `My goal is ${goalItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}\nPlease return all subsequent responses in the language of the list.`
       }
     ]}, {
@@ -276,7 +273,7 @@ async function resumeSession(shoakuId) {
 }
 
 async function syncShoakuLists(filePath) {
-  const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+  const content = await readFile(filePath, { encoding: 'utf8' });
   lists = parser.parse(content);
   for (const goal of lists) {
     if (goal.shoakuId) {
@@ -285,7 +282,7 @@ async function syncShoakuLists(filePath) {
     }
   }
   process.stdout.write(
-    buildNotification("shoaku/notification", {
+    buildNotification('shoaku/notification', {
       lists
     })
   );
@@ -344,11 +341,11 @@ process.stdin.on('data', async (chunk) => {
         case 'initialize':
           await mkdir(shoakuDir, { recursive: true });
           await mkdir(sessionsDir, { recursive: true });
-          const data = `
----
-defaultTokenBudget: 1000000
-`.trimStart();
-          await writeFile(join(shoakuDir, 'config.yaml'), data, { flag: "wx" }).catch((e) => {
+          const data = [
+            '---',
+            'defaultTokenBudget: 1000000',
+          ].join('\n');
+          await writeFile(join(shoakuDir, 'config.yaml'), data, { flag: 'wx' }).catch((e) => {
             if (e.code !== 'EEXIST') {
               throw e;
             }
@@ -358,9 +355,7 @@ defaultTokenBudget: 1000000
           initializeParams = message.params;
           await syncShoakuLists(initializeParams.initializationOptions.filePath);
           activeGoalItem = findActiveParentItem(lists);
-          logWarn(`Initialization params: ${JSON.stringify(initializeParams)}, active goal item: ${JSON.stringify(activeGoalItem)}`);
 
-          const metaData = await readFile(join(sessionsDir, activeGoalItem.shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
           lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
           lspInputBuilder.onAgentInput(async (input) => {
             if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
@@ -419,7 +414,7 @@ defaultTokenBudget: 1000000
                 threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
                 input: [
                   {
-                    type: "text",
+                    type: 'text',
                     text: `Regarding ${input.content}, Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
                   }
                 ]}, {
@@ -435,7 +430,7 @@ defaultTokenBudget: 1000000
                         threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
                         input: [
                           {
-                            type: "text",
+                            type: 'text',
                             text: `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
                           }
                         ]}
@@ -448,11 +443,11 @@ defaultTokenBudget: 1000000
             }
           });
 
-          appServer.stdin.write(JSON.stringify(buildAppRequest("initialize", {
+          appServer.stdin.write(JSON.stringify(buildAppRequest('initialize', {
             clientInfo: {
-              name: "shoaku_intellij",
-              title: "Shoaku for IntelliJ",
-              version: "0.1.0"
+              name: 'shoaku_intellij',
+              title: 'Shoaku for IntelliJ',
+              version: '0.1.0'
             },
             capabilities: {
               optOutNotificationMethods: ['item/agentMessage/delta']
@@ -499,7 +494,7 @@ defaultTokenBudget: 1000000
                     threadId: sessionId,
                     input: [
                       {
-                        type: "text",
+                        type: 'text',
                         text: `Regarding ${currentGoalItem?.content}, summarize only the conversations that will be useful in the future, listing them as bullet points.`
                       }
                     ]}, {
@@ -512,7 +507,7 @@ defaultTokenBudget: 1000000
                         const shoakuId = sessionToShoaku.get(params.threadId);
                         const diff = renderSummaryDiff(content, shoakuId, params.item.text, { unified: 2 });
                         process.stdout.write(
-                          buildNotification("shoaku/showDiff", {
+                          buildNotification('shoaku/showDiff', {
                             shoakuId,
                             response: params.item.text,
                             diff
@@ -580,7 +575,7 @@ defaultTokenBudget: 1000000
       }
     }
   } catch (err) {
-    logError(`Error processing message from language client: ${err.message}`);
+    logError(`Error processing message from language client: ${err}`);
   }
 });
 
@@ -670,7 +665,7 @@ function buildAppRequest(method, params) {
 
 function logInfo(message) {
   process.stdout.write(
-    buildNotification("window/logMessage", {
+    buildNotification('window/logMessage', {
       type: 3,
       message
     })
@@ -679,7 +674,7 @@ function logInfo(message) {
 
 function logWarn(message) {
   process.stdout.write(
-    buildNotification("window/logMessage", {
+    buildNotification('window/logMessage', {
       type: 2,
       message
     })
@@ -688,7 +683,7 @@ function logWarn(message) {
 
 function logError(message) {
   process.stdout.write(
-    buildNotification("window/showMessage", {
+    buildNotification('window/showMessage', {
       type: 1,
       message
     })
