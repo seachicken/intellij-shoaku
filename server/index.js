@@ -48,7 +48,8 @@ appServer.stdout.on('data', (chunk) => {
       logError(`Received non-JSON message from app server: ${line}`);
       continue;
     }
-    const logPrefix = sessionToShoaku.has(message.params?.threadId) ? '[navigator] ' : message.params?.threadId ? '[explorer] ' : '';
+    const shoakuId = sessionToShoaku.get(message.params?.threadId)
+    const logPrefix = shoakuToSession.get(shoakuId)?.navigatorThreadId === message.params?.threadId ? '[navigator] ' : message.params?.threadId ? '[explorer] ' : '';
     logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
 
     if (message.id != null && pendingRequests.has(message.id)) {
