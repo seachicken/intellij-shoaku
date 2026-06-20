@@ -5,10 +5,10 @@
 
     <!-- Public plugin name should be written in Title Case.
      Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
-    <name>Intellij-shoaku</name>
+    <name>Shoaku</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+    <vendor email="seito.tanaka.dev@gmail.com" url="https://github.com/seachicken">seito.tanaka</vendor>
 
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
@@ -30,7 +30,7 @@
     <extensions defaultExtensionNs="com.intellij">
         <projectService serviceImplementation="shoaku.ShoakuSettings" />
         <toolWindow id="Shoaku" factoryClass="shoaku.MyToolWindowFactory"
-                    icon="AllIcons.Toolwindows.ToolWindowPalette"
+                    icon="icons/logo/logo.svg"
                     anchor="right"/>
         <platform.lsp.serverSupportProvider implementation="shoaku.LanguageServerProvider"/>
     </extensions>
