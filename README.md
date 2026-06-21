@@ -1,6 +1,6 @@
 # Shoaku for IntelliJ
 
-<a href="https://youtu.be/bpcHnJt88sc" target="_blank">
+<a href="https://youtu.be/bpcHnJt88sc?cc_load_policy=1" target="_blank">
   <img src="https://img.youtube.com/vi/bpcHnJt88sc/maxresdefault.jpg" alt="Shoaku for Intellij" width="480" height="270" />
 </a>
 
