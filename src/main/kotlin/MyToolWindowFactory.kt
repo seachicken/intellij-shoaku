@@ -1,80 +1,67 @@
 package shoaku
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.ui.awt.SwingPanel
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.platform.lsp.api.LspServerManager
-import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.JBColor
+import com.intellij.ui.OnePixelSplitter
 import com.intellij.util.ui.JBUI
+import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
 import org.jetbrains.jewel.ui.icon.PathIconKey
-import java.text.NumberFormat
 import java.awt.Dimension
 import java.beans.PropertyChangeListener
-import java.util.Locale
+import java.text.NumberFormat
+import java.util.*
 import kotlin.math.abs
-import kotlinx.coroutines.launch
 
 class MyToolWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
@@ -1280,99 +1267,321 @@ private fun ChatEntryRow(
     }
 }
 
-private sealed interface AgentMessageBlock {
-    data class Paragraph(val text: String) : AgentMessageBlock
-    data class Code(val language: String?, val code: String) : AgentMessageBlock
-}
-
 @Composable
 private fun AgentMessageContent(message: String) {
     val blocks = remember(message) { parseAgentMessageBlocks(message) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is AgentMessageBlock.Paragraph -> Text(
+                is AgentMessageBlock.Paragraph -> MarkdownTextBlock(text = block.text)
+                is AgentMessageBlock.Heading -> MarkdownTextBlock(
                     text = block.text,
-                    color = TodoColors.infoText
+                    style = TextStyle(
+                        color = TodoColors.primaryText,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = headingFontSize(block.level),
+                        lineHeight = (headingFontSize(block.level).value + 6).sp
+                    )
                 )
-
-                is AgentMessageBlock.Code -> Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(TodoColors.codeBlockSurface)
-                        .border(1.dp, TodoColors.codeBlockBorder, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                is AgentMessageBlock.UnorderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    block.items.forEach { MarkdownListItem(marker = "•", text = it) }
+                }
+                is AgentMessageBlock.OrderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    block.items.forEach { (number, item) -> MarkdownListItem(marker = "$number.", text = item) }
+                }
+                is AgentMessageBlock.Quote -> Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    block.language?.takeIf { it.isNotBlank() }?.let { language ->
-                        Text(
-                            text = language,
+                    Box(
+                        modifier = Modifier
+                            .width(3.dp)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(TodoColors.agentMessageDivider)
+                    )
+                    MarkdownTextBlock(
+                        text = block.text,
+                        modifier = Modifier.weight(1f),
+                        style = TextStyle(
                             color = TodoColors.secondaryText,
-                            fontSize = 11.sp
+                            fontStyle = FontStyle.Italic,
+                            fontSize = 13.sp,
+                            lineHeight = 20.sp
                         )
-                    }
-                    Text(
-                        text = block.code,
-                        color = TodoColors.infoText,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        lineHeight = 18.sp
                     )
                 }
+                is AgentMessageBlock.Code -> CodeBlock(block)
+                AgentMessageBlock.ThematicBreak -> Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(TodoColors.agentMessageDivider)
+                )
+            }
+        }
+    }
+}
+
+private sealed interface AgentMessageBlock {
+    data class Paragraph(val text: String) : AgentMessageBlock
+    data class Heading(val level: Int, val text: String) : AgentMessageBlock
+    data class Code(val language: String?, val code: String) : AgentMessageBlock
+    data class UnorderedList(val items: List<String>) : AgentMessageBlock
+    data class OrderedList(val items: List<Pair<String, String>>) : AgentMessageBlock
+    data class Quote(val text: String) : AgentMessageBlock
+    data object ThematicBreak : AgentMessageBlock
+}
+
+private const val MarkdownLinkTag = "markdown-link"
+
+@Composable
+private fun MarkdownTextBlock(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle = TextStyle(
+        color = TodoColors.infoText,
+        fontSize = 13.sp,
+        lineHeight = 20.sp
+    )
+) {
+    val annotatedText = remember(text) { buildMarkdownAnnotatedString(text) }
+    ClickableText(
+        text = annotatedText,
+        modifier = modifier,
+        style = style,
+        onClick = { offset ->
+            annotatedText
+                .getStringAnnotations(MarkdownLinkTag, offset, offset)
+                .firstOrNull()
+                ?.let { BrowserUtil.browse(it.item) }
+        }
+    )
+}
+
+@Composable
+private fun MarkdownListItem(
+    marker: String,
+    text: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(
+            text = marker,
+            color = TodoColors.secondaryText,
+            fontSize = 13.sp,
+            modifier = Modifier.widthIn(min = 18.dp)
+        )
+        MarkdownTextBlock(
+            text = text,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun CodeBlock(block: AgentMessageBlock.Code) {
+    val horizontalScroll = rememberScrollState()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(TodoColors.codeBlockChatSurface)
+            .border(1.dp, TodoColors.codeBlockBorder, RoundedCornerShape(10.dp))
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        block.language?.takeIf { it.isNotBlank() }?.let { language ->
+            Text(
+                text = language,
+                color = TodoColors.secondaryText,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(horizontalScroll)
+                .padding(horizontal = 12.dp)
+        ) {
+            SelectionContainer {
+                Text(
+                    text = block.code,
+                    color = TodoColors.infoText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp,
+                    softWrap = false,
+                    modifier = Modifier.wrapContentWidth(unbounded = true)
+                )
             }
         }
     }
 }
 
 private fun parseAgentMessageBlocks(message: String): List<AgentMessageBlock> {
-    val fence = "```"
-    if (!message.contains(fence)) {
-        return listOf(AgentMessageBlock.Paragraph(message))
-    }
-
+    val lines = message.lines()
     val blocks = mutableListOf<AgentMessageBlock>()
-    var cursor = 0
-    while (cursor < message.length) {
-        val fenceStart = message.indexOf(fence, cursor)
-        if (fenceStart == -1) {
-            val tail = message.substring(cursor)
-            if (tail.isNotEmpty()) {
-                blocks += AgentMessageBlock.Paragraph(tail)
+    var index = 0
+
+    while (index < lines.size) {
+        val trimmed = lines[index].trim()
+        if (trimmed.isEmpty()) {
+            index += 1
+            continue
+        }
+
+        if (trimmed.startsWith("```")) {
+            val language = trimmed.removePrefix("```").trim().ifBlank { null }
+            val codeLines = mutableListOf<String>()
+            index += 1
+            while (index < lines.size && !lines[index].trim().startsWith("```")) {
+                codeLines += lines[index]
+                index += 1
             }
-            break
+            if (index < lines.size) index += 1
+            blocks += AgentMessageBlock.Code(language, codeLines.joinToString("\n"))
+            continue
         }
 
-        if (fenceStart > cursor) {
-            val paragraph = message.substring(cursor, fenceStart)
-            if (paragraph.isNotEmpty()) {
-                blocks += AgentMessageBlock.Paragraph(paragraph)
+        Regex("^(#{1,6})\\s+(.+)$").matchEntire(trimmed)?.let { match ->
+            blocks += AgentMessageBlock.Heading(match.groupValues[1].length, match.groupValues[2])
+            index += 1
+            continue
+        }
+
+        if (trimmed.matches(Regex("^(-{3,}|\\*{3,})$"))) {
+            blocks += AgentMessageBlock.ThematicBreak
+            index += 1
+            continue
+        }
+
+        if (trimmed.startsWith(">")) {
+            val quoteLines = mutableListOf<String>()
+            while (index < lines.size && lines[index].trim().startsWith(">")) {
+                quoteLines += lines[index].trim().removePrefix(">").trimStart()
+                index += 1
             }
+            blocks += AgentMessageBlock.Quote(quoteLines.joinToString("\n"))
+            continue
         }
 
-        val infoLineStart = fenceStart + fence.length
-        val codeStart = message.indexOf('\n', infoLineStart)
-        if (codeStart == -1) {
-            blocks += AgentMessageBlock.Paragraph(message.substring(fenceStart))
-            break
+        if (trimmed.matches(Regex("^[-*]\\s+.+$"))) {
+            val items = mutableListOf<String>()
+            while (index < lines.size && lines[index].trim().matches(Regex("^[-*]\\s+.+$"))) {
+                items += lines[index].trim().replaceFirst(Regex("^[-*]\\s+"), "")
+                index += 1
+            }
+            blocks += AgentMessageBlock.UnorderedList(items)
+            continue
         }
 
-        val infoString = message.substring(infoLineStart, codeStart).trim().ifBlank { null }
-        val fenceEnd = message.indexOf(fence, codeStart + 1)
-        if (fenceEnd == -1) {
-            blocks += AgentMessageBlock.Paragraph(message.substring(fenceStart))
-            break
+        if (trimmed.matches(Regex("^\\d+\\.\\s+.+$"))) {
+            val items = mutableListOf<Pair<String, String>>()
+            while (index < lines.size && lines[index].trim().matches(Regex("^\\d+\\.\\s+.+$"))) {
+                Regex("^(\\d+)\\.\\s+(.+)$").matchEntire(lines[index].trim())?.let {
+                    items += it.groupValues[1] to it.groupValues[2]
+                }
+                index += 1
+            }
+            blocks += AgentMessageBlock.OrderedList(items)
+            continue
         }
 
-        val code = message.substring(codeStart + 1, fenceEnd).trimEnd('\n', '\r')
-        blocks += AgentMessageBlock.Code(language = infoString, code = code)
-        cursor = fenceEnd + fence.length
-        if (cursor < message.length && message[cursor] == '\n') {
-            cursor += 1
+        val paragraphLines = mutableListOf<String>()
+        while (index < lines.size) {
+            val current = lines[index].trim()
+            if (
+                current.isEmpty() ||
+                current.startsWith("```") ||
+                current.startsWith(">") ||
+                current.matches(Regex("^(#{1,6})\\s+.+$")) ||
+                current.matches(Regex("^[-*]\\s+.+$")) ||
+                current.matches(Regex("^\\d+\\.\\s+.+$")) ||
+                current.matches(Regex("^(-{3,}|\\*{3,})$"))
+            ) break
+            paragraphLines += lines[index]
+            index += 1
         }
+        blocks += AgentMessageBlock.Paragraph(paragraphLines.joinToString("\n"))
     }
 
-    return blocks.ifEmpty { listOf(AgentMessageBlock.Paragraph(message)) }
+    return if (blocks.isEmpty()) listOf(AgentMessageBlock.Paragraph(message)) else blocks
+}
+
+private fun buildMarkdownAnnotatedString(text: String): AnnotatedString = buildAnnotatedString {
+    var cursor = 0
+    while (cursor < text.length) {
+        when {
+            text.startsWith("**", cursor) -> {
+                val end = text.indexOf("**", cursor + 2)
+                if (end > cursor + 2) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(text.substring(cursor + 2, end))
+                    }
+                    cursor = end + 2
+                } else {
+                    append(text[cursor++])
+                }
+            }
+            text.startsWith("`", cursor) -> {
+                val end = text.indexOf('`', cursor + 1)
+                if (end > cursor + 1) {
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Monospace,
+                            background = TodoColors.sectionSurface,
+                            color = TodoColors.infoText
+                        )
+                    ) {
+                        append(text.substring(cursor + 1, end))
+                    }
+                    cursor = end + 1
+                } else {
+                    append(text[cursor++])
+                }
+            }
+            text.startsWith("*", cursor) -> {
+                val end = text.indexOf('*', cursor + 1)
+                if (end > cursor + 1) {
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(text.substring(cursor + 1, end))
+                    }
+                    cursor = end + 1
+                } else {
+                    append(text[cursor++])
+                }
+            }
+            text.startsWith("[", cursor) -> {
+                val labelEnd = text.indexOf(']', cursor + 1)
+                val urlStart = if (labelEnd != -1) text.indexOf('(', labelEnd) else -1
+                val urlEnd = if (urlStart != -1) text.indexOf(')', urlStart) else -1
+                if (labelEnd != -1 && urlStart == labelEnd + 1 && urlEnd > urlStart + 1) {
+                    pushStringAnnotation(MarkdownLinkTag, text.substring(urlStart + 1, urlEnd))
+                    withStyle(SpanStyle(color = TodoColors.linkText, textDecoration = TextDecoration.Underline)) {
+                        append(text.substring(cursor + 1, labelEnd))
+                    }
+                    pop()
+                    cursor = urlEnd + 1
+                } else {
+                    append(text[cursor++])
+                }
+            }
+            else -> append(text[cursor++])
+        }
+    }
+}
+
+private fun headingFontSize(level: Int) = when (level) {
+    1 -> 22.sp
+    2 -> 20.sp
+    3 -> 18.sp
+    4 -> 16.sp
+    else -> 14.sp
 }
 
 @Composable
@@ -1584,11 +1793,13 @@ private object TodoColors {
     private val infoBackground = namedColor("Component.infoBackground", 0xFF24324A, 0xFFF3F7FF)
     val primaryText = namedColor("Label.foreground", 0xFFE6EDF3, 0xFF1F2328)
     val secondaryText = namedColor("Label.infoForeground", 0xFF9DA7B3, 0xFF667281)
+    val linkText = namedColor("Link.activeForeground", 0xFF6CB6FF, 0xFF0B57D0)
     val popupSecondaryText = blend(primaryText, secondaryText, 0.55f)
     val completedText = secondaryText.copy(alpha = 0.9f)
     val infoSurface = blend(panelBackground, listBackground, 0.9f)
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
     val sectionSurface = overlay(infoBackground.copy(alpha = 0.08f), blend(panelBackground, listBackground, 0.78f))
+    val codeBlockChatSurface = overlay(Color.Black.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.92f))
     val popupSurface = overlay(infoBackground.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.62f))
     val popupBorder = componentBorder.copy(alpha = 0.9f)
     val agentMessageDivider = componentBorder.copy(alpha = 0.54f)
