@@ -2,12 +2,13 @@
   "name": "@seachicken/shoaku-server",
   "version": "0.1.3",
   "type": "module",
-  "main": "index.js",
   "bin": {
-    "shoaku-server": "./bin/shoaku-server"
+    "shoaku-server": "./dist/shoaku-server.js"
   },
   "scripts": {
-    "test": "node --test"
+    "build": "rolldown -c",
+    "test": "node --test",
+    "prepublishOnly": "npm run build"
   },
   "author": "Seito Tanaka",
   "license": "MIT",
@@ -18,5 +19,8 @@
   "description": "Agent server for the Shoaku AI coding assistant",
   "dependencies": {
     "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "rolldown": "^1.1.2"
   }
 }
