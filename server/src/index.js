@@ -218,21 +218,15 @@ async function startNewSession(goalItem) {
     input: [
       {
         type: 'text',
-        text: `My goal is ${goalItem?.content}, and in the short term, I want to solve ${childItem?.content}.\nUser To Do List:\n${JSON.stringify(lists)}\nPlease return all subsequent responses in the language of the list.`
+        text: [
+          '[Shoaku:IGNORE]',
+          `My goal is "${goalItem?.content}", and in the short term, I want to solve "${childItem?.content}".`,
+          'Please return all subsequent responses in the language of the list.'
+        ].join('\n')
       }
     ]}, {
       onItemCompleted: (id, params) => {
-        if (params.item.type !== 'agentMessage') {
-          return;
-        }
-
-        chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.push({
-          turnId: params.turnId,
-          type: params.item.type,
-          text: params.item.text ||
-            params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
-          command: params.item.command
-        });
+        appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
         syncShoakuLists(initializeParams.initializationOptions.filePath);
       }
     }
@@ -271,6 +265,25 @@ async function resumeSession(shoakuId) {
     navigatorThreadId: metaData.navigatorSessionId,
     explorerThreadId: metaData.explorerSessionId
   });
+
+  const chat = chatByShoakuId.get(sessionToShoaku.get(navigatorThreadId));
+  if (!chat?.messages || chat.messages.length === 0) {
+    sendAppRequest('thread/read', {
+      threadId: navigatorThreadId,
+      includeTurns: true
+    }).then((res) => {
+      for (const turn of res.result.thread.turns) {
+        for (const item of turn.items) {
+          if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE_ALL]')) {
+            break;
+          }
+
+          appendChatHistory(sessionToShoaku.get(navigatorThreadId), turn.id, item);
+        }
+      }
+      syncShoakuLists(initializeParams.initializationOptions.filePath);
+    });
+  }
 }
 
 async function syncShoakuLists(filePath) {
@@ -385,22 +398,14 @@ process.stdin.on('data', async (chunk) => {
               input: [
                 {
                   type: 'text',
-                  text: 'Do you have any advice regarding the code you are currently editing to accomplish the task?'
+                  text: [
+                    '[Shoaku:IGNORE]',
+                    'Do you have any advice regarding the code you are currently editing to accomplish the task?'
+                  ].join('\n')
                 }
               ]}, {
                 onItemCompleted: async (id, params) => {
-                  if (params.item.type === 'userMessage' ||
-                      (params.item.type === 'agentMessage' && !params.item.text)) {
-                    return;
-                  }
-
-                  chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.push({
-                    turnId: params.turnId,
-                    type: params.item.type,
-                    text: params.item.text ||
-                      params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
-                    command: params.item.command
-                  });
+                  appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
                   syncShoakuLists(initializeParams.initializationOptions.filePath);
                 }
               }
@@ -418,7 +423,10 @@ process.stdin.on('data', async (chunk) => {
                   input: [
                     {
                       type: 'text',
-                      text: `Regarding ${input.content}, Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
+                      text: [
+                        '[Shoaku:IGNORE_ALL]',
+                        `Regarding "${input.content}", Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
+                      ].join('\n')
                     }
                   ]}, {
                     onItemCompleted: async (id, params) => {
@@ -434,7 +442,10 @@ process.stdin.on('data', async (chunk) => {
                           input: [
                             {
                               type: 'text',
-                              text: `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+                              text: [
+                                '[Shoaku:IGNORE_ALL]',
+                                `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+                              ].join('\n')
                             }
                           ]}
                         );
@@ -450,22 +461,14 @@ process.stdin.on('data', async (chunk) => {
                   input: [
                     {
                       type: 'text',
-                      text: `Regarding ${input.content}, Please think of a good task to do next.`
+                      text: [
+                        '[Shoaku:IGNORE]',
+                        `Regarding "${input.content}", Please think of a good task to do next.`
+                      ].join('\n')
                     }
                   ]}, {
                     onItemCompleted: async (id, params) => {
-                      if (params.item.type === 'userMessage' ||
-                          (params.item.type === 'agentMessage' && !params.item.text)) {
-                        return;
-                      }
-
-                      chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.push({
-                        turnId: params.turnId,
-                        type: params.item.type,
-                        text: params.item.text ||
-                          params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
-                        command: params.item.command
-                      });
+                      appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
                       syncShoakuLists(initializeParams.initializationOptions.filePath);
                     }
                   }
@@ -527,6 +530,7 @@ process.stdin.on('data', async (chunk) => {
                       {
                         type: 'text',
                         text: [
+                          '[Shoaku:IGNORE_ALL]',
                           'Summarize the threads according to the following:',
                           '- Prioritize keeping decisions made only within the thread.',
                           '- Summarize into about three points; if there are no key points, omit them.',
@@ -669,6 +673,23 @@ function findActiveItem(lists) {
   }
 
   return null;
+}
+
+function appendChatHistory(shoakuId, turnId, item) {
+  if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE]')) {
+    return;
+  }
+  if (!item.text && !item.content && !item.command) {
+    return;
+  }
+
+  chatByShoakuId.get(shoakuId)?.messages.push({
+    turnId,
+    type: item.type,
+    text: item.text ||
+      item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
+    command: item.command
+  });
 }
 
 const pendingTurns = new Map();
