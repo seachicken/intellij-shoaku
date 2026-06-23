@@ -34,4 +34,5 @@ jobs:
           node-version-file: 'server/.nvmrc'
           registry-url: https://registry.npmjs.org/
           package-manager-cache: false
+      - run: npm ci
       - run: npm publish --access public
