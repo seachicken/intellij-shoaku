@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import YAML from 'yaml';
 import AgentInputBuilder, { inputType } from './agent-input-builder.js';
 import { renderSummary, renderSummaryDiff } from './diff-snippet.js';
+import { cleanupStaleBranches } from './git.js';
 import parser from './parser.js';
 
 const exec = promisify(child_process.exec);
@@ -127,7 +128,7 @@ async function startNewSession(goalItem) {
     }),
     (async () => {
       logWarn(`Created temporary work directory: ${workDir}`)
-      await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir}`);
+      await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir} -b ${shoakuId.replace('-', '/')}`);
       return sendAppRequest('thread/start', {
         cwd: workDir,
         approvalPolicy: 'on-request',
@@ -369,6 +370,8 @@ process.stdin.on('data', async (chunk) => {
           initializeParams = message.params;
           await syncShoakuLists(initializeParams.initializationOptions.filePath);
           activeGoalItem = findActiveParentItem(lists);
+
+          cleanupStaleBranches(initializeParams.rootPath);
 
           lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
           lspInputBuilder.onAgentInput(async (input) => {
