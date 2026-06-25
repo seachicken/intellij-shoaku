@@ -71,7 +71,6 @@ data class Item(
     val type: String,
     val content: String,
     val checked: Boolean? = null,
-    var status: String = "",
     val children: List<Item> = emptyList(),
     val shoakuId: String? = null,
     val messages: List<Message>? = emptyList(),
