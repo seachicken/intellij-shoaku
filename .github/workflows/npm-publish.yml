@@ -5,6 +5,15 @@ name: Node.js Package
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'If you are pre-releasing in beta, run `npm version prerelease --preid beta` beforehand.'
+        required: true
+        default: 'latest'
+        type: choice
+        options:
+          - latest
+          - beta
 permissions:
   id-token: write
 
@@ -35,4 +44,4 @@ jobs:
           registry-url: https://registry.npmjs.org/
           package-manager-cache: false
       - run: npm ci
-      - run: npm publish --access public
+      - run: npm publish --access public --tag ${{ inputs.tag }}

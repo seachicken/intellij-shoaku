@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { homedir } from 'node:os';
 import { mkdir, mkdtemp, readFile, watch, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
