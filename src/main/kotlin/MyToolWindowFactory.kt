@@ -57,6 +57,7 @@ import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
 import org.jetbrains.jewel.ui.icon.PathIconKey
+import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import java.awt.Dimension
 import java.beans.PropertyChangeListener
 import java.text.NumberFormat
@@ -101,7 +102,9 @@ private fun MyToolWindowContent(
     val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
     var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
     var detailTodoPaneFraction by remember { mutableStateOf(0.1f) }
-    val sessions = vm.items.filter { it.shoakuId != null }
+    val goals = vm.items
+    val goalFilter = vm.goalFilter
+    val sessions = goals.filter { it.shoakuId != null }
     val openSessions = openSessionKeys.mapNotNull { key -> sessions.firstOrNull { it.sessionKey == key } }
     val selectedSession = selectedSessionKey?.let { key -> sessions.firstOrNull { it.sessionKey == key } }
 
@@ -132,11 +135,16 @@ private fun MyToolWindowContent(
 
         if (selectedSession == null) {
             SessionListContent(
-                sessions = sessions,
+                goals = goals,
+                filter = goalFilter,
                 filePathState = filePathState,
                 project = project,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                onFilterChange = { vm.goalFilter = it },
                 onOpenSession = { session ->
+                    if (session.shoakuId == null) {
+                        return@SessionListContent
+                    }
                     project?.let {
                         LspServerManager.getInstance(project)
                             .getServersForProvider(LanguageServerProvider::class.java)
@@ -278,12 +286,18 @@ private fun SessionHeaderItem(
 
 @Composable
 private fun SessionListContent(
-    sessions: List<Item>,
+    goals: List<Item>,
+    filter: GoalFilter,
     filePathState: androidx.compose.foundation.text.input.TextFieldState,
     project: Project?,
     modifier: Modifier = Modifier,
+    onFilterChange: (GoalFilter) -> Unit,
     onOpenSession: (Item) -> Unit
 ) {
+    val filteredGoals = remember(goals, filter) {
+        goals.filter { filter.matches(it) }
+    }
+
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -298,34 +312,54 @@ private fun SessionListContent(
                 state = filePathState,
                 modifier = Modifier.weight(1f)
             )
-            OutlinedButton(onClick = {
-                if (project != null) {
-                    val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor("md")
-                    FileChooser.chooseFile(descriptor, project, null) { virtualFile ->
-                        filePathState.setTextAndPlaceCursorAtEnd(virtualFile.path)
+            ToolbarIconButton(
+                iconKey = AllIconsKeys.General.OpenDisk,
+                contentDescription = MyMessageBundle.message("toolwindow.MyToolWindow.filePath.browse.button"),
+                onClick = {
+                    chooseGoalsFile(project) { selectedPath ->
+                        filePathState.setTextAndPlaceCursorAtEnd(selectedPath)
                     }
                 }
-            }) {
-                Text(MyMessageBundle.message("toolwindow.MyToolWindow.filePath.browse.button"))
-            }
+            )
+            GoalFilterButton(
+                selectedFilter = filter,
+                onFilterChange = onFilterChange,
+                counts = GoalFilter.entries.associateWith { candidate ->
+                    goals.count { candidate.matches(it) }
+                }
+            )
         }
 
-        if (sessions.isEmpty()) {
+        if (goals.isEmpty()) {
             GoalsEmptyState(
                 modifier = modifier
             )
             return
         }
 
-        val listState = rememberLazyListState()
-        val activeSessionIndex = sessions.indexOfFirst { it.checked == false }
+        if (filteredGoals.isEmpty()) {
+            InfoCard(
+                title = "No matching goals",
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Try another filter to see more goals.",
+                    fontSize = 12.sp,
+                    color = TodoColors.secondaryText
+                )
+            }
+            return
+        }
 
-        LaunchedEffect(sessions) {
-            if (sessions.isEmpty()) {
+        val listState = rememberLazyListState()
+        val activeSessionIndex = filteredGoals.indexOfFirst { it.checked == false }
+
+        LaunchedEffect(filteredGoals) {
+            if (filteredGoals.isEmpty()) {
                 return@LaunchedEffect
             }
 
-            val targetIndex = if (activeSessionIndex >= 0) activeSessionIndex else sessions.lastIndex
+            val targetIndex = if (activeSessionIndex >= 0) activeSessionIndex else filteredGoals.lastIndex
             listState.animateScrollToItem(targetIndex)
         }
 
@@ -334,17 +368,16 @@ private fun SessionListContent(
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            itemsIndexed(sessions) { index, session ->
+            itemsIndexed(filteredGoals) { _, session ->
                 val todoItems = session.children.filter { it.checked != null }
-                val activeChild = todoItems.firstOrNull { it.checked == false }
                 TodoRow(
                     title = session.content,
                     meta = null,
-                    subtitle = activeChild?.status?.takeIf { it.isNotBlank() } ?: "${todoItems.size} tasks",
+                    subtitle = "${todoItems.size} tasks",
                     completed = session.checked ?: false,
                     compact = true,
                     hoverable = true,
-                    onClick = { onOpenSession(session) }
+                    onClick = if (session.shoakuId != null) ({ onOpenSession(session) }) else null
                 )
             }
         }
@@ -1608,6 +1641,96 @@ private data class SessionKey(
     val shoakuId: String
 )
 
+private fun chooseGoalsFile(
+    project: Project?,
+    onFileSelected: (String) -> Unit
+) {
+    if (project == null) {
+        return
+    }
+
+    val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor("md")
+    FileChooser.chooseFile(descriptor, project, null) { virtualFile ->
+        onFileSelected(virtualFile.path)
+    }
+}
+
+@Composable
+private fun GoalFilterButton(
+    selectedFilter: GoalFilter,
+    onFilterChange: (GoalFilter) -> Unit,
+    counts: Map<GoalFilter, Int>,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Box(modifier = modifier.wrapContentWidth()) {
+        ToolbarIconButton(
+            iconKey = AllIconsKeys.General.Filter,
+            contentDescription = "Filter goals",
+            selected = expanded,
+            onClick = {
+                expanded = !expanded
+            }
+        )
+
+        if (expanded) {
+            PopupMenu(
+                onDismissRequest = {
+                    expanded = false
+                    true
+                },
+                horizontalAlignment = Alignment.End
+            ) {
+                GoalFilter.entries.forEach { filter ->
+                    selectableItem(
+                        selected = filter == selectedFilter,
+                        iconKey = null,
+                        onClick = {
+                            onFilterChange(filter)
+                            expanded = false
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(text = filter.label)
+                            Text(
+                                text = (counts[filter] ?: 0).toString(),
+                                fontSize = 11.sp,
+                                color = TodoColors.secondaryText
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolbarIconButton(
+    iconKey: org.jetbrains.jewel.ui.icon.IconKey,
+    contentDescription: String,
+    selected: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    SelectableIconButton(
+        selected = selected,
+        onClick = onClick,
+        modifier = modifier.size(28.dp)
+    ) {
+        Icon(
+            key = iconKey,
+            contentDescription = contentDescription,
+            tint = if (selected) TodoColors.primaryText else TodoColors.secondaryText
+        )
+    }
+}
+
 private val Item.sessionKey
     get() = SessionKey(requireNotNull(shoakuId))
 
@@ -1938,7 +2061,7 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             "bbb",
             checked = null,
             children = listOf(
-                Item("text", "bbb-1", checked = false, status = "Next"),
+                Item("text", "bbb-1", checked = false),
                 Item("text", "bbb-2", checked = null)
             )
         )

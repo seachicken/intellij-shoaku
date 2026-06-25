@@ -25,6 +25,17 @@ class ShoakuSettings : PersistentStateComponent<ShoakuSettings.State> {
 
 class ShoakuViewModel {
     var items by mutableStateOf<List<Item>>(emptyList())
+    var goalFilter by mutableStateOf(GoalFilter.All)
     val diffResponses = mutableStateMapOf<String, ShoakuShowDiffParams>()
     val tokenBudgetOverrides = mutableStateMapOf<String, Int>()
+}
+
+enum class GoalFilter(val label: String) {
+    All("All"),
+    Open("Open");
+
+    fun matches(item: Item): Boolean = when (this) {
+        All -> true
+        Open -> item.checked != true
+    }
 }
