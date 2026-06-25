@@ -13,7 +13,7 @@ import shoaku.LanguageServerProvider.Companion.SERVER_VERSION
 
 class LanguageServerProvider : LspServerSupportProvider {
     companion object {
-        const val SERVER_VERSION = "0.1.3"
+        const val SERVER_VERSION = "0.1.6-beta.0"
     }
 
     override fun fileOpened(
