@@ -75,7 +75,13 @@ class MyToolWindowFactory : ToolWindowFactory {
             MyToolWindowContent(
                 project.service<ShoakuSettings>().viewModel,
                 project.service<ShoakuSettings>().state,
-                project
+                project,
+                onFilePathChange = { newPath ->
+                    LspServerManager.getInstance(project)
+                        .getServersForProvider(LanguageServerProvider::class.java)
+                        .first()
+                        .sendNotification { (it as AppLanguageServer).didChangeGoalsFilePath(DidChangeGoalsFilePath(newPath)) }
+                }
             )
         }
     }
@@ -95,21 +101,21 @@ private fun MyToolWindowContent(
     state: ShoakuSettings.State,
     project: Project? = null,
     initialOpenSessionKeys: List<SessionKey> = emptyList(),
-    initialSelectedSessionKey: SessionKey? = null
+    initialSelectedSessionKey: SessionKey? = null,
+    onFilePathChange: (String) -> Unit = {}
 ) {
     val filePathState = rememberTextFieldState(initialText = state.filePath)
     val vm = remember { viewModel }
     val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
     var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
     var detailTodoPaneFraction by remember { mutableStateOf(0.1f) }
-    val goals = vm.items
+    val goals = vm.items.filter { it.shoakuId != null }
     val goalFilter = vm.goalFilter
-    val sessions = goals.filter { it.shoakuId != null }
-    val openSessions = openSessionKeys.mapNotNull { key -> sessions.firstOrNull { it.sessionKey == key } }
-    val selectedSession = selectedSessionKey?.let { key -> sessions.firstOrNull { it.sessionKey == key } }
+    val openSessions = openSessionKeys.mapNotNull { key -> goals.firstOrNull { it.sessionKey == key } }
+    val selectedSession = selectedSessionKey?.let { key -> goals.firstOrNull { it.sessionKey == key } }
 
-    LaunchedEffect(sessions) {
-        val currentKeys = sessions.map { it.sessionKey }.toSet()
+    LaunchedEffect(goals) {
+        val currentKeys = goals.map { it.sessionKey }.toSet()
         openSessionKeys.removeAll { it !in currentKeys }
         if (selectedSessionKey != null && selectedSessionKey !in currentKeys) {
             selectedSessionKey = null
@@ -171,8 +177,10 @@ private fun MyToolWindowContent(
         }
     }
 
-    LaunchedEffect(filePathState.text) {
-        state.filePath = filePathState.text.toString()
+    LaunchedEffect(filePathState.text.toString()) {
+        val updatedFilePath = filePathState.text.toString()
+        state.filePath = updatedFilePath
+        onFilePathChange(updatedFilePath)
     }
 }
 
@@ -2063,7 +2071,8 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             children = listOf(
                 Item("text", "bbb-1", checked = false),
                 Item("text", "bbb-2", checked = null)
-            )
+            ),
+            shoakuId = "shoaku-preview-2"
         )
     )
     diffResponses["shoaku-preview-1"] = ShoakuShowDiffParams(

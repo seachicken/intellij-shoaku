@@ -196,13 +196,20 @@ async function startNewSession(goalItem) {
 
   const childItem = findActiveItem(goalItem?.children ?? []);
 
-  const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
-  const lines = content.split('\n');
-  lines[goalItem.line] =
-    lines[goalItem.line].slice(0, goalItem.labelPosition.start)
-    + `[${shoakuId}]`
-    + lines[goalItem.line].slice(goalItem.labelPosition.end);
-  await writeFile(initializeParams.initializationOptions.filePath, lines.join('\n'), { encoding: 'utf8' });
+  try {
+    const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+    const lines = content.split('\n');
+    lines[goalItem.line] =
+      lines[goalItem.line].slice(0, goalItem.labelPosition.start)
+      + `[${shoakuId}]`
+      + lines[goalItem.line].slice(goalItem.labelPosition.end);
+    await writeFile(initializeParams.initializationOptions.filePath, lines.join('\n'), { encoding: 'utf8' });
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      throw e;
+    }
+  }
+
   const sessionDir = join(sessionsDir, shoakuId);
   await mkdir(sessionDir, { recursive: true });
   const metaData = {
@@ -290,8 +297,16 @@ async function resumeSession(shoakuId) {
 }
 
 async function syncShoakuLists(filePath) {
-  const content = await readFile(filePath, { encoding: 'utf8' });
-  lists = parser.parse(content);
+  try {
+    const content = await readFile(filePath, { encoding: 'utf8' });
+    lists = parser.parse(content);
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      throw e;
+    }
+    lists = [];
+  }
+
   for (const goal of lists) {
     if (goal.shoakuId) {
       goal.messages = chatByShoakuId.get(goal.shoakuId)?.messages;
@@ -419,7 +434,6 @@ process.stdin.on('data', async (chunk) => {
 
           goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
           goalInputBuilder.onAgentInput(async (input) => {
-            logWarn(`debounce goal input: ${JSON.stringify(input)}`);
             if (input?.shoakuId) {
               const task = findActiveItem(input?.children ?? []);
               if (task) {
@@ -439,9 +453,7 @@ process.stdin.on('data', async (chunk) => {
                         return;
                       }
 
-                      logWarn(`goal summary. new: ${params.item.text}, old: ${goalByShoakuId.get(activeGoalItem.shoakuId)}`);
                       if (params.item.text) {
-                        logWarn('update goal summary')
                         startTurn({
                           threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
                           input: [
@@ -460,7 +472,6 @@ process.stdin.on('data', async (chunk) => {
                   }
                 );
               } else {
-                logWarn(`think next task`);
                 startTurn({
                   threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
                   input: [
@@ -502,90 +513,17 @@ process.stdin.on('data', async (chunk) => {
             }
           }));
 
-          try {
-            for await (const event of watch(initializeParams.initializationOptions.filePath)) {
-              await syncShoakuLists(initializeParams.initializationOptions.filePath);
-              activeGoalItem = findActiveParentItem(lists);
-              if (goalInputBuilder) {
-                goalInputBuilder.ingest({
-                  type: inputType.GOAL,
-                  content: activeGoalItem
-                });
-              }
-
-              for (const item of lists) {
-                if (item.checked === false && !item.shoakuId) {
-                  logWarn('Start new session');
-                  await startNewSession(item);
-                }
-              }
-
-              if (prevGoalItem?.checked === false && prevGoalItem.shoakuId) {
-                const currentGoalItem = findItemByShoakuId(lists, prevGoalItem.shoakuId);
-                if (currentGoalItem && currentGoalItem.shoakuId === prevGoalItem?.shoakuId && currentGoalItem.checked && !prevGoalItem.checked) {
-                  const navigatorThreadId = shoakuToSession.get(currentGoalItem.shoakuId).navigatorThreadId;
-                  if (!navigatorThreadId) {
-                    logError(`No active session found for shoakuId ${currentGoalItem.shoakuId}`);
-                    return;
-                  }
-
-                  await startTurn({
-                    threadId: navigatorThreadId,
-                    input: [
-                      {
-                        type: 'text',
-                        text: [
-                          '[Shoaku:IGNORE_ALL]',
-                          'Summarize the threads according to the following:',
-                          '- Prioritize keeping decisions made only within the thread.',
-                          '- Summarize into about three points; if there are no key points, omit them.',
-                        ].join('\n')
-                      }
-                    ],
-                    outputSchema: {
-                      type: 'object',
-                      properties: {
-                        summary: {
-                          type: 'array',
-                          items: { type: 'string' }
-                        }
-                      },
-                      required: [ 'summary' ],
-                      additionalProperties: false
-                    }
-                  }, {
-                      onItemCompleted: async (id, params) => {
-                        if (params.item.type !== 'agentMessage') {
-                          return;
-                        }
-
-                        const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
-                        const shoakuId = sessionToShoaku.get(params.threadId);
-                        const diff = renderSummaryDiff(content, shoakuId, params.item.text, { unified: 2 });
-                        process.stdout.write(
-                          buildNotification('shoaku/showDiff', {
-                            shoakuId,
-                            response: params.item.text,
-                            diff
-                          })
-                        );
-                      }
-                    }
-                  );
-                }
-              }
-
-              if (activeGoalItem) {
-                prevGoalItem = activeGoalItem;
-              }
-            }
-          } catch (err) {
-            logError(`Error watching file: ${err}`);
-          }
+          watchGoalsFileUpdates();
           break;
 
         case 'shutdown':
           process.stdout.write(buildResponse(message.id, null));
+          break;
+
+        case 'shoaku/didChangeGoalsFilePath':
+          initializeParams.initializationOptions.filePath = message.params.filePath;
+          await syncShoakuLists(initializeParams.initializationOptions.filePath);
+          watchGoalsFileUpdates();
           break;
 
         case 'shoaku/startSession':
@@ -595,9 +533,15 @@ process.stdin.on('data', async (chunk) => {
           break;
 
         case 'shoaku/applyDiff':
-          const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
-          const updatedContent = renderSummary(content, message.params.shoakuId, message.params.response);
-          await writeFile(initializeParams.initializationOptions.filePath, updatedContent, { encoding: 'utf8' });
+          try {
+            const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+            const updatedContent = renderSummary(content, message.params.shoakuId, message.params.response);
+            await writeFile(initializeParams.initializationOptions.filePath, updatedContent, { encoding: 'utf8' });
+          } catch(e) {
+            if (e.code !== 'ENOENT') {
+              throw e;
+            }
+          }
           break;
 
         case 'shoaku/reply':
@@ -638,6 +582,105 @@ process.stdin.on('data', async (chunk) => {
 process.stdin.on('end', () => {
   appServer.stdin.end();
 });
+
+let prevValidGoalsFilePath = null;
+async function watchGoalsFileUpdates() {
+  try {
+    const filePath = initializeParams.initializationOptions.filePath;
+    for await (const event of watch(filePath)) {
+      if (prevValidGoalsFilePath != null && initializeParams.initializationOptions.filePath !== prevValidGoalsFilePath) {
+        prevValidGoalsFilePath = null;
+        return;
+      }
+      prevValidGoalsFilePath = filePath;
+
+      await syncShoakuLists(filePath);
+      activeGoalItem = findActiveParentItem(lists);
+      if (goalInputBuilder) {
+        goalInputBuilder.ingest({
+          type: inputType.GOAL,
+          content: activeGoalItem
+        });
+      }
+
+      for (const item of lists) {
+        if (item.checked === false && !item.shoakuId) {
+          logWarn('Start new session');
+          await startNewSession(item);
+        }
+      }
+
+      if (prevGoalItem?.checked === false && prevGoalItem.shoakuId) {
+        const currentGoalItem = findItemByShoakuId(lists, prevGoalItem.shoakuId);
+        if (currentGoalItem && currentGoalItem.shoakuId === prevGoalItem?.shoakuId && currentGoalItem.checked && !prevGoalItem.checked) {
+          const navigatorThreadId = shoakuToSession.get(currentGoalItem.shoakuId).navigatorThreadId;
+          if (!navigatorThreadId) {
+            logError(`No active session found for shoakuId ${currentGoalItem.shoakuId}`);
+            return;
+          }
+
+          await startTurn({
+            threadId: navigatorThreadId,
+            input: [
+              {
+                type: 'text',
+                text: [
+                  '[Shoaku:IGNORE_ALL]',
+                  'Summarize the threads according to the following:',
+                  '- Prioritize keeping decisions made only within the thread.',
+                  '- Summarize into about three points; if there are no key points, omit them.',
+                ].join('\n')
+              }
+            ],
+            outputSchema: {
+              type: 'object',
+              properties: {
+                summary: {
+                  type: 'array',
+                  items: { type: 'string' }
+                }
+              },
+              required: [ 'summary' ],
+              additionalProperties: false
+            }
+          }, {
+              onItemCompleted: async (id, params) => {
+                if (params.item.type !== 'agentMessage') {
+                  return;
+                }
+
+                try {
+                  const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
+                  const shoakuId = sessionToShoaku.get(params.threadId);
+                  const diff = renderSummaryDiff(content, shoakuId, params.item.text, { unified: 2 });
+                  process.stdout.write(
+                    buildNotification('shoaku/showDiff', {
+                      shoakuId,
+                      response: params.item.text,
+                      diff
+                    })
+                  );
+                } catch (e) {
+                  if (e.code !== 'ENOENT') {
+                    throw e;
+                  }
+                }
+              }
+            }
+          );
+        }
+      }
+
+      if (activeGoalItem) {
+        prevGoalItem = activeGoalItem;
+      }
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      logError(`Error watching file: ${err}`);
+    }
+  }
+}
 
 function findItemByShoakuId(lists, shoakuId) {
   if (!lists) {

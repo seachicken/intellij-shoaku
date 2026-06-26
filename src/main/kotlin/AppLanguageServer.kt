@@ -4,6 +4,9 @@ import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
 import org.eclipse.lsp4j.services.LanguageServer
 
 interface AppLanguageServer : LanguageServer {
+    @JsonNotification("shoaku/didChangeGoalsFilePath")
+    fun didChangeGoalsFilePath(params: DidChangeGoalsFilePath)
+
     @JsonNotification("shoaku/startSession")
     fun startSession(params: StartSessionParams)
 
@@ -13,6 +16,10 @@ interface AppLanguageServer : LanguageServer {
     @JsonNotification("shoaku/reply")
     fun reply(params: ReplyParams)
 }
+
+data class DidChangeGoalsFilePath(
+    val filePath: String
+)
 
 data class StartSessionParams(
     val shoakuId: String?
