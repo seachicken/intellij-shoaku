@@ -31,7 +31,7 @@ graph TD
   end
 
   shoaku-server -- read/write --> todo[("{goals}.md")]
-  IDE <-- LSP --> shoaku-server -- <a href='https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md'>ASP</a> --> codex
+  IDE <-- <a href='https://microsoft.github.io/language-server-protocol/'>LSP</a> --> shoaku-server -- <a href='https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md'>ASP</a> --> codex
   shoaku-server -- "git worktree add" --> worktree-files
   navigator -- read --> project-files
   explorer -- read/write --> worktree-files
