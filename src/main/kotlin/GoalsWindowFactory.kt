@@ -64,7 +64,7 @@ import java.text.NumberFormat
 import java.util.*
 import kotlin.math.abs
 
-class MyToolWindowFactory : ToolWindowFactory {
+class GoalsWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
@@ -87,7 +87,7 @@ class MyToolWindowFactory : ToolWindowFactory {
     }
 }
 
-private val ChatSendIconKey = PathIconKey("/icons/send/send.svg", MyToolWindowFactory::class.java)
+private val ChatSendIconKey = PathIconKey("/icons/send/send.svg", GoalsWindowFactory::class.java)
 private val EmptyGoalsSample = """
 - [ ] Fix errors with large item counts [shoaku]
   - [ ] Reproduce the issue
@@ -315,14 +315,14 @@ private fun SessionListContent(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(MyMessageBundle.message("toolwindow.MyToolWindow.filePath.label"))
+            Text("Goals file:")
             TextField(
                 state = filePathState,
                 modifier = Modifier.weight(1f)
             )
             ToolbarIconButton(
                 iconKey = AllIconsKeys.General.OpenDisk,
-                contentDescription = MyMessageBundle.message("toolwindow.MyToolWindow.filePath.browse.button"),
+                contentDescription = "Browse",
                 onClick = {
                     chooseGoalsFile(project) { selectedPath ->
                         filePathState.setTextAndPlaceCursorAtEnd(selectedPath)
