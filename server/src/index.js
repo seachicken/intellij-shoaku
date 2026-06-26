@@ -159,6 +159,17 @@ async function startNewSession(goalItem) {
   });
 
   await Promise.all([
+    sendAppRequest('thread/name/set', {
+      threadId: navigatorThreadId,
+      name: `[${shoakuId}:navigator] ${goalItem.content}`
+    }),
+    sendAppRequest('thread/name/set', {
+      threadId: explorerThreadId,
+      name: `[${shoakuId}:explorer] ${goalItem.content}`
+    }),
+  ]);
+
+  await Promise.all([
     sendAppRequest('thread/inject_items', {
       threadId: navigatorThreadId,
       items: [
