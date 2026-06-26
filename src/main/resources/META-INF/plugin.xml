@@ -5,7 +5,7 @@
 
     <!-- Public plugin name should be written in Title Case.
      Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-name -->
-    <name>Shoaku</name>
+    <name>Shoaku - Your Coding Navigator</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
     <vendor email="seito.tanaka.dev@gmail.com" url="https://github.com/seachicken">seito.tanaka</vendor>
