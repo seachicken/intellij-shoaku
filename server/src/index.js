@@ -36,7 +36,7 @@ let activeGoalItem;
 let prevGoalItem;
 
 let appBuf = Buffer.alloc(0);
-appServer.stdout.on('data', (chunk) => {
+appServer.stdout.on('data', async (chunk) => {
   appBuf = Buffer.concat([appBuf, chunk]);
 
   let newlineIdx;
@@ -78,6 +78,17 @@ appServer.stdout.on('data', (chunk) => {
           usage.navigatorTokens = message.params.tokenUsage.total.totalTokens;
         } else {
           usage.explorerTokens = message.params.tokenUsage.total.totalTokens;
+        }
+
+        try {
+          const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
+          metaData.navigator.tokenUsage = usage.navigatorTokens;
+          metaData.explorer.tokenUsage = usage.explorerTokens;
+          await writeFile(join(sessionsDir, shoakuId, 'meta.json'), JSON.stringify(metaData, null, 2));
+        } catch (e) {
+          if (e.code !== 'ENOENT') {
+            throw e;
+          }
         }
         break;
     }
@@ -213,9 +224,12 @@ async function startNewSession(goalItem) {
   const sessionDir = join(sessionsDir, shoakuId);
   await mkdir(sessionDir, { recursive: true });
   const metaData = {
-    navigatorSessionId: navigatorThreadId,
-    explorerSessionId: explorerThreadId,
-    temporaryWorkspace: workDir
+    navigator: {
+      threadId: navigatorThreadId
+    },
+    explorer: {
+      threadId: explorerThreadId
+    },
   };
   await writeFile(join(sessionDir, 'meta.json'), JSON.stringify(metaData, null, 2), { flag: 'wx' }).catch((e) => {
     if (e.code !== 'EEXIST') {
@@ -235,36 +249,37 @@ async function startNewSession(goalItem) {
         ].join('\n')
       }
     ]}, {
-      onItemCompleted: (id, params) => {
+      onItemCompleted: async (id, params) => {
         appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
-        syncShoakuLists(initializeParams.initializationOptions.filePath);
+        await syncShoakuLists(initializeParams.initializationOptions.filePath);
       }
     }
   );
 }
 
 async function resumeSession(shoakuId) {
-  chatByShoakuId.set(shoakuId, {
-    messages: [],
-    tokenUsage: {
-      maxTokens: config?.defaultTokenBudget || 0,
-      navigatorTokens: 0,
-      explorerTokens: 0
-    }
-  });
   goalByShoakuId.set(shoakuId, '');
   const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
-  if (!metaData.navigatorSessionId || !metaData.explorerSessionId) {
+  if (!metaData.navigator?.threadId || !metaData.explorer?.threadId) {
     logWarn(`Invalid session metadata for shoakuId ${shoakuId}`);
     return;
   }
 
+  chatByShoakuId.set(shoakuId, {
+    messages: [],
+    tokenUsage: {
+      maxTokens: config?.defaultTokenBudget || 0,
+      navigatorTokens: metaData.navigator.tokenUsage || 0,
+      explorerTokens: metaData.explorer.tokenUsage || 0
+    }
+  });
+
   const [navigatorRes, explorerRes] = await Promise.all([
     sendAppRequest('thread/resume', {
-      threadId: metaData.navigatorSessionId
+      threadId: metaData.navigator.threadId
     }),
     sendAppRequest('thread/resume', {
-      threadId: metaData.explorerSessionId
+      threadId: metaData.explorer.threadId
     })
   ]);
   const navigatorThreadId = navigatorRes.result.thread.id;
@@ -272,8 +287,8 @@ async function resumeSession(shoakuId) {
   sessionToShoaku.set(navigatorThreadId, shoakuId);
   sessionToShoaku.set(explorerThreadId, shoakuId);
   shoakuToSession.set(shoakuId, {
-    navigatorThreadId: metaData.navigatorSessionId,
-    explorerThreadId: metaData.explorerSessionId
+    navigatorThreadId: metaData.navigator.threadId,
+    explorerThreadId: metaData.explorer.threadId
   });
 
   const chat = chatByShoakuId.get(sessionToShoaku.get(navigatorThreadId));
@@ -281,7 +296,7 @@ async function resumeSession(shoakuId) {
     sendAppRequest('thread/read', {
       threadId: navigatorThreadId,
       includeTurns: true
-    }).then((res) => {
+    }).then(async (res) => {
       for (const turn of res.result.thread.turns) {
         for (const item of turn.items) {
           if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE_ALL]')) {
@@ -291,7 +306,7 @@ async function resumeSession(shoakuId) {
           appendChatHistory(sessionToShoaku.get(navigatorThreadId), turn.id, item);
         }
       }
-      syncShoakuLists(initializeParams.initializationOptions.filePath);
+      await syncShoakuLists(initializeParams.initializationOptions.filePath);
     });
   }
 }
@@ -426,7 +441,7 @@ process.stdin.on('data', async (chunk) => {
               ]}, {
                 onItemCompleted: async (id, params) => {
                   appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
-                  syncShoakuLists(initializeParams.initializationOptions.filePath);
+                  await syncShoakuLists(initializeParams.initializationOptions.filePath);
                 }
               }
             );
@@ -434,7 +449,7 @@ process.stdin.on('data', async (chunk) => {
 
           goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
           goalInputBuilder.onAgentInput(async (input) => {
-            if (input?.shoakuId) {
+            if (input?.shoakuId && shoakuToSession.has(input.shoakuId)) {
               const task = findActiveItem(input?.children ?? []);
               if (task) {
                 startTurn({
@@ -485,7 +500,7 @@ process.stdin.on('data', async (chunk) => {
                   ]}, {
                     onItemCompleted: async (id, params) => {
                       appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
-                      syncShoakuLists(initializeParams.initializationOptions.filePath);
+                      await syncShoakuLists(initializeParams.initializationOptions.filePath);
                     }
                   }
                 );
@@ -559,7 +574,7 @@ process.stdin.on('data', async (chunk) => {
                 text: message.params.text
               }
             ]}, {
-              onItemCompleted: (id, params) => {
+              onItemCompleted: async (id, params) => {
                 chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.push({
                   turnId: params.turnId,
                   type: params.item.type,
@@ -567,7 +582,7 @@ process.stdin.on('data', async (chunk) => {
                     params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
                   command: params.item.command
                 });
-                syncShoakuLists(initializeParams.initializationOptions.filePath);
+                await syncShoakuLists(initializeParams.initializationOptions.filePath);
               }
             }
           );
