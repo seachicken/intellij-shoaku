@@ -23,8 +23,6 @@
     <depends>com.intellij.modules.compose</depends>
     <depends>com.intellij.modules.lsp</depends>
 
-    <resource-bundle>messages.MyMessageBundle</resource-bundle>
-
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
