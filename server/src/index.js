@@ -53,7 +53,7 @@ appServer.stdout.on('data', async (chunk) => {
     }
     const shoakuId = sessionToShoaku.get(message.params?.threadId)
     const logPrefix = shoakuToSession.get(shoakuId)?.navigatorThreadId === message.params?.threadId ? '[navigator] ' : message.params?.threadId ? '[explorer] ' : '';
-    logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.keys()]}`);
+    logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.values()].flatMap((v) => [...v.keys()])}`);
 
     if (message.id != null && pendingRequests.has(message.id)) {
       const { resolve, reject } = pendingRequests.get(message.id);
@@ -108,25 +108,29 @@ appServer.stdout.on('data', async (chunk) => {
         }
         break;
       }
-    }
 
-    if (message.params?.turnId != null && pendingTurns.has(message.params.turnId)) {
-      const { id, callbacks } = pendingTurns.get(message.params.turnId);
-      if (message.method === 'item/completed') {
-        callbacks?.onItemCompleted(id, message.params)
-      }
-    }
-
-    if (message.params?.turn != null && pendingTurns.has(message.params.turn.id)) {
-      const { resolve, reject } = pendingTurns.get(message.params.turn.id);
-      if (message.method === 'turn/completed') {
-        pendingTurns.delete(message.params.turn.id);
-        if (message.error) {
-          reject(message.error);
-        } else {
-          resolve(message.result);
+      case 'item/completed':
+        if (pendingTurns.get(message.params.threadId)?.has(message.params.turnId)) {
+          const { id, callbacks } = pendingTurns.get(message.params.threadId).get(message.params.turnId);
+          callbacks?.onItemCompleted(id, message.params)
         }
-      }
+        break;
+
+      case 'turn/completed':
+        if (pendingTurns.get(message.params.threadId)?.has(message.params.turn.id)) {
+          const turns = pendingTurns.get(message.params.threadId);
+          const { resolve, reject } = turns.get(message.params.turn.id);
+          turns.delete(message.params.turn.id);
+          if (turns.size === 0) {
+            pendingTurns.delete(message.params.threadId);
+          }
+          if (message.error) {
+            reject(message.error);
+          } else {
+            resolve(message.result);
+          }
+        }
+        break;
     }
   }
 });
@@ -620,6 +624,7 @@ process.stdin.on('data', async (chunk) => {
             }
           );
           break;
+
       }
     }
   } catch (err) {
@@ -789,21 +794,22 @@ function appendChatHistory(shoakuId, turnId, item) {
 
 const pendingTurns = new Map();
 async function startTurn(params, callbacks) {
-  for (const turnId of pendingTurns.keys()) {
+  const turns = pendingTurns.get(params.threadId) || new Map();
+  for (const turnId of turns.keys()) {
     try {
       await sendAppRequest('turn/interrupt', {
         threadId: params.threadId,
         turnId
       });
-    } catch(err) {
-      logInfo(`Failed to interrupt turn ${turnId}, it might have already been completed. Error: ${err.message}`);
+    } catch(e) {
+      logInfo(`Failed to interrupt turn ${turnId}, it might have already been completed. error: ${e}`);
     }
   }
 
   const msg = await sendAppRequest('turn/start', params);
-
   return new Promise((resolve, reject) => {
-    pendingTurns.set(msg.result.turn.id, { id: msg.id, resolve, reject, callbacks });
+    turns.set(msg.result.turn.id, { id: msg.id, resolve, reject, callbacks });
+    pendingTurns.set(params.threadId, turns);
   });
 }
 
