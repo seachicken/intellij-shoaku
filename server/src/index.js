@@ -470,7 +470,7 @@ process.stdin.on('data', async (chunk) => {
                       type: 'text',
                       text: [
                         '[Shoaku:IGNORE_ALL]',
-                        `Regarding "${input.content}", Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
+                        `Regarding "${JSON.stringify(input)}", Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
                       ].join('\n')
                     }
                   ]}, {
@@ -631,7 +631,6 @@ async function watchGoalsFileUpdates() {
 
       for (const item of lists) {
         if (item.checked === false && !item.shoakuId) {
-          logWarn('Start new session');
           await startNewSession(item);
         }
       }
