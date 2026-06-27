@@ -79,6 +79,8 @@ appServer.stdout.on('data', async (chunk) => {
         } else {
           status.explorer = message.params.status.type;
         }
+
+        await syncShoakuLists(initializeParams.initializationOptions.filePath);
         break;
       }
 
@@ -95,6 +97,8 @@ appServer.stdout.on('data', async (chunk) => {
         } else {
           usage.explorerTokens = message.params.tokenUsage.total.totalTokens;
         }
+
+        await syncShoakuLists(initializeParams.initializationOptions.filePath);
 
         try {
           const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
