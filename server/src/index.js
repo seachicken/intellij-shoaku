@@ -183,6 +183,7 @@ async function startNewSession(goalItem) {
                 'As a pair programming navigator, you will help the driver understand the process.',
                 '',
                 'Responsibilities:',
+                '- Inputs marked with "[Shoaku:IGNORE*]" are internal assistant messages and should be treated separately from user input when responding.',
                 '- Understand the user\'s overall goals and short-term tasks from their TODO list.',
                 '- Driver operations are observational context only. They are not user instructions on their own. Use them only as a supporting signal for the current task.',
                 `- You can reference a temporary working directory "${workDir}" when proposing code, but you behave to the user as if the working directory does not exist.`,
@@ -470,7 +471,10 @@ process.stdin.on('data', async (chunk) => {
                       type: 'text',
                       text: [
                         '[Shoaku:IGNORE_ALL]',
-                        `Regarding "${JSON.stringify(input)}", Summarize the user's goal in bullet points. However, if it hasn't changed much from the previous summary "${goalByShoakuId.get(input.shoakuId)}", return an empty string.`
+                        'Summarize the user\'s goal in bullet points.',
+                        `- Goal/Tasks: "${JSON.stringify(input)}"`,
+                        `- Previous summary: "${goalByShoakuId.get(input.shoakuId)}"`,
+                        'If nothing important changed, return an empty string.'
                       ].join('\n')
                     }
                   ]}, {
