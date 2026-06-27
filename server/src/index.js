@@ -79,7 +79,6 @@ appServer.stdout.on('data', async (chunk) => {
         } else {
           status.explorer = message.params.status.type;
         }
-        await syncShoakuLists(initializeParams.initializationOptions.filePath);
         break;
       }
 
@@ -156,7 +155,7 @@ async function startNewSession(goalItem) {
       sandbox: 'read-only'
     }),
     (async () => {
-      logWarn(`Created temporary work directory: ${workDir}`)
+      logInfo(`Created temporary work directory: ${workDir}`)
       await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir} -b ${shoakuId.replace('-', '/')}`);
       return sendAppRequest('thread/start', {
         cwd: workDir,
@@ -611,13 +610,7 @@ process.stdin.on('data', async (chunk) => {
               }
             ]}, {
               onItemCompleted: async (id, params) => {
-                chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.push({
-                  turnId: params.turnId,
-                  type: params.item.type,
-                  text: params.item.text ||
-                    params.item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
-                  command: params.item.command
-                });
+                appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
                 await syncShoakuLists(initializeParams.initializationOptions.filePath);
               }
             }
@@ -777,7 +770,7 @@ function appendChatHistory(shoakuId, turnId, item) {
   if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE]')) {
     return;
   }
-  if (!item.text && !item.content && !item.command) {
+  if (!item.text && !(item.content?.length > 0) && !item.command && !item.query) {
     return;
   }
 
@@ -786,7 +779,7 @@ function appendChatHistory(shoakuId, turnId, item) {
     type: item.type,
     text: item.text ||
       item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
-    command: item.command
+    command: item.command || item.query
   });
 }
 

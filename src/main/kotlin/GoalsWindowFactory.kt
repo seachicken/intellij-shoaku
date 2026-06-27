@@ -1768,6 +1768,7 @@ private fun ChatActivityRow(
     topSpacing: Dp
 ) {
     val command = entry.command ?: return
+    val verb = if (entry.type == "webSearch") "Searched" else "Ran"
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1775,7 +1776,7 @@ private fun ChatActivityRow(
         horizontalArrangement = Arrangement.Start
     ) {
         Text(
-            text = "Ran $command",
+            text = "$verb $command",
             fontSize = 11.sp,
             color = TodoColors.secondaryText.copy(alpha = 0.78f)
         )
