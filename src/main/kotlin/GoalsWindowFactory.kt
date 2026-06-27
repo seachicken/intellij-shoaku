@@ -1,6 +1,12 @@
 package shoaku
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -32,6 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -380,12 +387,22 @@ private fun SessionListContent(
                 val todoItems = session.children.filter { it.checked != null }
                 TodoRow(
                     title = session.content,
-                    meta = null,
                     subtitle = "${todoItems.size} tasks",
+                    meta = null,
                     completed = session.checked ?: false,
                     compact = true,
                     hoverable = true,
-                    onClick = if (session.shoakuId != null) ({ onOpenSession(session) }) else null
+                    onClick = if (session.shoakuId != null) ({ onOpenSession(session) }) else null,
+                    trailing = {
+                        session.status?.toSummaryStatusState()?.takeIf { it.tone != AgentStatusTone.Hidden }?.let { status ->
+                            StatusPill(
+                                label = status.label,
+                                tone = status.tone,
+                                pulse = statusPulse(),
+                                minWidth = Dp.Unspecified
+                            )
+                        }
+                    }
                 )
             }
         }
@@ -605,6 +622,7 @@ private fun SessionChatPane(
                 trailing = {
                     TokenUsageIndicator(
                         tokenUsage = effectiveTokenUsage,
+                        status = session.status,
                         onIncreaseBudget = {
                             val shoakuId = session.shoakuId ?: return@TokenUsageIndicator
                             val currentMax = effectiveTokenUsage?.maxTokens ?: session.tokenUsage?.maxTokens ?: return@TokenUsageIndicator
@@ -659,12 +677,25 @@ private fun SessionChatPane(
 @Composable
 private fun TokenUsageIndicator(
     tokenUsage: TokenUsageUi?,
+    status: AgentStatusUi? = null,
     onIncreaseBudget: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val activity = remember(status) { activityFromStatus(status) }
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val pressed by interactionSource.collectIsPressedAsState()
+    val hasRunningAgent = activity.any { it.isRunning }
+    val transition = rememberInfiniteTransition(label = "tokenUsageActivity")
+    val pulse by transition.animateFloat(
+        initialValue = 0.2f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1800, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "tokenUsageActivityPulse"
+    )
     val usageFraction = remember(tokenUsage) {
         if (tokenUsage == null) {
             0f
@@ -681,9 +712,11 @@ private fun TokenUsageIndicator(
     val chipBackground = when {
         pressed -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.18f)
         hovered || expanded -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.1f)
+        hasRunningAgent -> TodoColors.activityGlow(activityPulse = pulse)
         else -> Color.Transparent
     }
     val chipBorder = when {
+        hasRunningAgent -> TodoColors.activityBorder(activityPulse = pulse, emphasized = hovered || expanded)
         hovered || expanded -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.5f)
         else -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.22f)
     }
@@ -707,6 +740,12 @@ private fun TokenUsageIndicator(
                     .size(10.dp)
                     .drawBehind {
                         val strokeWidth = size.minDimension * 0.22f
+                        if (hasRunningAgent) {
+                            drawCircle(
+                                color = TodoColors.activityGlowStrong(activityPulse = pulse),
+                                radius = size.minDimension * (0.68f + 0.2f * pulse)
+                            )
+                        }
                         drawArc(
                             color = TodoColors.tokenUsageTrackBorder.copy(alpha = 0.45f),
                             startAngle = -90f,
@@ -737,40 +776,56 @@ private fun TokenUsageIndicator(
                 onDismissRequest = { expanded = false },
                 properties = PopupProperties(focusable = true)
             ) {
-                Column(
-                    modifier = Modifier
-                        .widthIn(min = 300.dp, max = 360.dp)
-                        .shadow(16.dp, RoundedCornerShape(14.dp))
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(TodoColors.popupSurface)
-                        .border(1.dp, TodoColors.popupBorder, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "Token budget",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = TodoColors.primaryText
-                        )
-                    }
-                    TokenUsageCard(
-                        tokenUsage = tokenUsage,
-                        onIncreaseBudget = onIncreaseBudget,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                TokenUsagePopupContent(
+                    tokenUsage = tokenUsage,
+                    activity = activity,
+                    onIncreaseBudget = onIncreaseBudget
+                )
             }
         }
     }
 }
 
 @Composable
+private fun TokenUsagePopupContent(
+    tokenUsage: TokenUsageUi,
+    activity: List<AgentActivityState>,
+    onIncreaseBudget: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .widthIn(min = 300.dp, max = 360.dp)
+            .shadow(16.dp, RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(TodoColors.popupSurface)
+            .border(1.dp, TodoColors.popupBorder, RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = "Token budget",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = TodoColors.primaryText
+            )
+        }
+        TokenUsageCard(
+            tokenUsage = tokenUsage,
+            activity = activity,
+            onIncreaseBudget = onIncreaseBudget,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
 private fun TokenUsageCard(
     tokenUsage: TokenUsageUi,
+    activity: List<AgentActivityState>,
     onIncreaseBudget: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -784,54 +839,22 @@ private fun TokenUsageCard(
 
     Column(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TokenLegendItem(
-                    color = TodoColors.navigatorTokenUsage,
-                    label = "Navigator"
-                )
-                TokenLegendItem(
-                    color = TodoColors.explorerTokenUsage,
-                    label = "Explorer"
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
-                            append(formatTokenCount(totalTokens))
-                        }
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
-                            append(" / ")
-                        }
-                        withStyle(
-                            androidx.compose.ui.text.SpanStyle(
-                                color = if (addButtonHovered) TodoColors.primaryText else TodoColors.popupSecondaryText
-                            )
-                        ) {
-                            append(formatTokenCount(maxTokens))
-                        }
-                    },
-                    fontSize = 12.sp
-                )
-                CompactAddButton(
-                    onHoverChange = { addButtonHovered = it },
-                    onClick = { onIncreaseBudget?.invoke() }
-                )
-            }
+            TokenLegendItem(
+                color = TodoColors.navigatorTokenUsage,
+                label = "Navigator",
+                state = activity.getOrNull(0)
+            )
+            TokenLegendItem(
+                color = TodoColors.explorerTokenUsage,
+                label = "Explorer",
+                state = activity.getOrNull(1)
+            )
         }
 
         Box(
@@ -869,28 +892,140 @@ private fun TokenUsageCard(
                 }
             }
         }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = buildAnnotatedString {
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
+                            append(formatTokenCount(totalTokens))
+                        }
+                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
+                            append(" / ")
+                        }
+                        withStyle(
+                            androidx.compose.ui.text.SpanStyle(
+                                color = if (addButtonHovered) TodoColors.primaryText else TodoColors.popupSecondaryText
+                            )
+                        ) {
+                            append(formatTokenCount(maxTokens))
+                        }
+                    },
+                    fontSize = 12.sp
+                )
+                CompactAddButton(
+                    onHoverChange = { addButtonHovered = it },
+                    onClick = { onIncreaseBudget?.invoke() }
+                )
+            }
+        }
     }
 }
 
 @Composable
 private fun TokenLegendItem(
     color: Color,
-    label: String
+    label: String,
+    state: AgentActivityState? = null
 ) {
+    val statusSlotWidth = 60.dp
+    val isRunning = state?.isRunning == true
+    val statusTone = state?.tone ?: AgentStatusTone.Hidden
+    val statusLabel = state?.displayStatus.orEmpty()
+    val transition = rememberInfiniteTransition(label = "${label}LegendIndicator")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "${label}LegendIndicatorPulse"
+    )
     Row(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
                 .size(6.dp)
                 .clip(RoundedCornerShape(999.dp))
-                .background(color)
+                .background(color.copy(alpha = if (isRunning) 0.92f else 0.72f))
         )
         Text(
             text = label,
-            color = TodoColors.popupSecondaryText,
-            fontSize = 11.sp
+            color = if (isRunning) TodoColors.primaryText else TodoColors.popupSecondaryText,
+            fontSize = 11.sp,
+            fontWeight = if (isRunning) FontWeight.Medium else FontWeight.Normal,
+            modifier = Modifier.width(64.dp)
+        )
+        Box(
+            modifier = Modifier
+                .width(statusSlotWidth)
+                .padding(start = 2.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (statusTone != AgentStatusTone.Hidden) {
+                StatusPill(
+                    label = statusLabel,
+                    tone = statusTone,
+                    pulse = pulse,
+                    minWidth = Dp.Unspecified
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(
+    label: String,
+    tone: AgentStatusTone,
+    pulse: Float,
+    modifier: Modifier = Modifier,
+    minWidth: Dp = Dp.Unspecified
+) {
+    val background = when (tone) {
+        AgentStatusTone.Running -> TodoColors.statusRunningSurface(activityPulse = pulse)
+        AgentStatusTone.Error -> TodoColors.statusError.copy(alpha = 0.16f)
+        AgentStatusTone.Hidden -> Color.Transparent
+    }
+    val border = when (tone) {
+        AgentStatusTone.Running -> TodoColors.statusRunningBorder(activityPulse = pulse)
+        AgentStatusTone.Error -> TodoColors.statusError.copy(alpha = 0.42f)
+        AgentStatusTone.Hidden -> Color.Transparent
+    }
+    val content = when (tone) {
+        AgentStatusTone.Running -> TodoColors.statusRunningText
+        AgentStatusTone.Error -> TodoColors.statusError
+        AgentStatusTone.Hidden -> Color.Transparent
+    }
+
+    Box(
+        modifier = modifier
+            .then(if (minWidth != Dp.Unspecified) Modifier.widthIn(min = minWidth) else Modifier)
+            .clip(RoundedCornerShape(999.dp))
+            .background(background)
+            .border(1.dp, border, RoundedCornerShape(999.dp))
+            .padding(
+                horizontal = 8.dp,
+                vertical = 3.dp
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = content,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -1292,12 +1427,14 @@ private fun ChatEntryRow(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 if (isUser) {
+                    val userBubbleShape = RoundedCornerShape(14.dp)
                     Text(
                         text = message,
                         color = TodoColors.userMessageText,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(userBubbleShape)
                             .background(TodoColors.userMessageSurface)
+                            .border(1.dp, TodoColors.userMessageBorder, userBubbleShape)
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     )
                 } else {
@@ -1751,7 +1888,8 @@ private fun TodoRow(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     hoverable: Boolean = false,
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
@@ -1803,12 +1941,16 @@ private fun TodoRow(
                 )
             }
         }
-        meta?.let {
-            Text(
-                text = it,
-                fontSize = 12.sp,
-                color = TodoColors.secondaryText
-            )
+        if (trailing != null) {
+            trailing()
+        } else {
+            meta?.let {
+                Text(
+                    text = it,
+                    fontSize = 12.sp,
+                    color = TodoColors.secondaryText
+                )
+            }
         }
     }
 }
@@ -1920,7 +2062,11 @@ private object TodoColors {
     private val componentBorder = namedColor("Component.borderColor", 0xFF4B5263, 0xFFC5CDD8)
     private val focusedBorder = namedColor("TabbedPane.focusColor", 0xFF4C9AFF, 0xFF4C9AFF)
     private val hoverBackground = namedColor("List.hoverBackground", 0xFF2D4366, 0xFFEAF2FF)
-    private val userMessageBlue = namedColor("Actions.Blue", 0xFF1849C6, 0xFF3574F0)
+    private val brandAccentPrimary = namedColor("Actions.Blue", 0xFF5A5FCF, 0xFF6876D6)
+    private val brandAccentSecondary = namedColor("Actions.Purple", 0xFF9160B3, 0xFF9A6CBC)
+    private val brandAccentBlend = blend(brandAccentPrimary, brandAccentSecondary, 0.4f)
+    private val tokenUsagePrimary = namedColor("Actions.Blue", 0xFF6B73F6, 0xFF5B6BF2)
+    private val tokenUsageSecondary = namedColor("Actions.Purple", 0xFFB06AE0, 0xFFA45DD8)
     private val infoBackground = namedColor("Component.infoBackground", 0xFF24324A, 0xFFF3F7FF)
     val primaryText = namedColor("Label.foreground", 0xFFE6EDF3, 0xFF1F2328)
     val secondaryText = namedColor("Label.infoForeground", 0xFF9DA7B3, 0xFF667281)
@@ -1936,27 +2082,32 @@ private object TodoColors {
     val agentMessageDivider = componentBorder.copy(alpha = 0.54f)
     val codeBlockSurface = namedColor("Editor.background", 0xFF1E1F22, 0xFF1E1F22)
     val codeBlockBorder = componentBorder.copy(alpha = 0.45f)
-    val userMessageSurface = overlay(userMessageBlue.copy(alpha = 0.78f), blend(listBackground, panelBackground, 0.16f))
-    val userMessageText = namedColor("TextArea.foreground", 0xFFF4F8FF, 0xFF17375E)
+    val userMessageSurface = overlay(componentBorder.copy(alpha = 0.26f), blend(listBackground, panelBackground, 0.3f))
+    val userMessageBorder = overlay(componentBorder.copy(alpha = 0.42f), brandAccentPrimary.copy(alpha = 0.08f))
+    val userMessageText = namedColor("TextArea.foreground", 0xFFE8EDF5, 0xFF2D3848)
     val composerSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.28f))
     val composerBorder = componentBorder.copy(alpha = 0.82f)
     val composerFocusBorder = focusedBorder
-    val composerSendSurface = overlay(userMessageBlue.copy(alpha = 0.88f), blend(listBackground, panelBackground, 0.12f))
-    val scrollHintSurface = overlay(userMessageBlue.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.4f))
+    val composerSendSurface = overlay(brandAccentPrimary.copy(alpha = 0.84f), blend(listBackground, panelBackground, 0.12f))
+    val scrollHintSurface = overlay(brandAccentBlend.copy(alpha = 0.2f), blend(listBackground, panelBackground, 0.4f))
     val scrollHintBorder = componentBorder.copy(alpha = 0.68f)
-    val scrollHintContent = namedColor("Label.foreground", 0xFFEAF2FF, 0xFF1D4A85)
+    val scrollHintContent = namedColor("Label.foreground", 0xFFF3F0FF, 0xFF424F85)
     val tokenUsageTrack = overlay(componentBorder.copy(alpha = 0.14f), blend(panelBackground, listBackground, 0.82f))
     val tokenUsageTrackBorder = componentBorder.copy(alpha = 0.62f)
-    val navigatorTokenUsage = namedColor("Actions.Blue", 0xFF3574F0, 0xFF3574F0)
-    val explorerTokenUsage = namedColor("Actions.Green", 0xFF4FAF6B, 0xFF3D9B58)
+    val navigatorTokenUsage = tokenUsagePrimary
+    val explorerTokenUsage = tokenUsageSecondary
     private val tokenUsageNeutral = namedColor("Label.disabledForeground", 0xFFC9D1D9, 0xFFB8C1CC)
     private val tokenUsageWarning = namedColor("Actions.Yellow", 0xFFE2A93B, 0xFFB26A00)
     private val tokenUsageDanger = namedColor("Actions.Red", 0xFFE05555, 0xFFC75450)
-    val tokenUsageButtonSurface = overlay(userMessageBlue.copy(alpha = 0.2f), blend(listBackground, panelBackground, 0.46f))
-    val tokenUsageButtonHover = overlay(userMessageBlue.copy(alpha = 0.3f), blend(listBackground, panelBackground, 0.36f))
-    val tokenUsageButtonPressed = overlay(userMessageBlue.copy(alpha = 0.42f), blend(listBackground, panelBackground, 0.28f))
-    val tokenUsageButtonBorder = overlay(userMessageBlue.copy(alpha = 0.34f), componentBorder.copy(alpha = 0.92f))
-    val tokenUsageButtonContent = namedColor("Label.foreground", 0xFFF2F7FF, 0xFF17375E)
+    val statusError = namedColor("Actions.Red", 0xFFE56A6A, 0xFFC75450)
+    val tokenUsageButtonSurface = overlay(brandAccentPrimary.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.46f))
+    val tokenUsageButtonHover = overlay(brandAccentBlend.copy(alpha = 0.28f), blend(listBackground, panelBackground, 0.36f))
+    val tokenUsageButtonPressed = overlay(brandAccentBlend.copy(alpha = 0.36f), blend(listBackground, panelBackground, 0.28f))
+    val tokenUsageButtonBorder = overlay(brandAccentPrimary.copy(alpha = 0.28f), componentBorder.copy(alpha = 0.92f))
+    val tokenUsageButtonContent = namedColor("Label.foreground", 0xFFF4F3FF, 0xFF35406A)
+    private val activityGlowStart = Color(0xFFB06BAF)
+    private val activityGlowEnd = Color(0xFF6867C7)
+    val statusRunningText = namedColor("Label.foreground", 0xFFF1E9FB, 0xFF5A3C78)
 
     fun tokenUsageIndicator(usageFraction: Float): Color {
         val clampedFraction = usageFraction.coerceIn(0f, 1f)
@@ -1965,6 +2116,30 @@ private object TodoColors {
             else -> lerp(tokenUsageWarning, tokenUsageDanger, (clampedFraction - 0.7f) / 0.3f)
         }
     }
+
+    fun activityGlow(activityPulse: Float): Color =
+        overlay(
+            blend(activityGlowStart, activityGlowEnd, 0.42f).copy(alpha = 0.1f + 0.14f * activityPulse.coerceIn(0f, 1f)),
+            Color.Transparent
+        )
+
+    fun activityGlowStrong(activityPulse: Float): Color =
+        blend(activityGlowStart, activityGlowEnd, 0.42f).copy(alpha = 0.12f + 0.12f * activityPulse.coerceIn(0f, 1f))
+
+    fun activityBorder(activityPulse: Float, emphasized: Boolean): Color {
+        val base = blend(activityGlowStart, activityGlowEnd, 0.42f)
+        val alpha = if (emphasized) 0.66f else 0.48f + 0.22f * activityPulse.coerceIn(0f, 1f)
+        return base.copy(alpha = alpha)
+    }
+
+    fun statusRunningSurface(activityPulse: Float): Color =
+        overlay(
+            blend(activityGlowStart, activityGlowEnd, 0.56f).copy(alpha = 0.1f + 0.08f * activityPulse.coerceIn(0f, 1f)),
+            popupSurface
+        )
+
+    fun statusRunningBorder(activityPulse: Float): Color =
+        blend(activityGlowStart, activityGlowEnd, 0.56f).copy(alpha = 0.42f + 0.18f * activityPulse.coerceIn(0f, 1f))
 
     fun defaultCard() = TodoCardColors(
         background = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.44f)),
@@ -1985,6 +2160,83 @@ private object TodoColors {
         background = overlay(hoverBackground.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.62f)),
         border = componentBorder.copy(alpha = 0.84f)
     )
+}
+
+private data class AgentActivityState(
+    val label: String,
+    val color: Color,
+    val isRunning: Boolean,
+    val displayStatus: String,
+    val tone: AgentStatusTone
+)
+
+private fun activityFromStatus(status: AgentStatusUi?): List<AgentActivityState> {
+    val navigatorState = status?.navigator.toAgentStatusState()
+    val explorerState = status?.explorer.toAgentStatusState()
+    return listOf(
+        AgentActivityState(
+            label = "Navigator",
+            color = TodoColors.navigatorTokenUsage,
+            isRunning = navigatorState.isRunning,
+            displayStatus = navigatorState.label,
+            tone = navigatorState.tone
+        ),
+        AgentActivityState(
+            label = "Explorer",
+            color = TodoColors.explorerTokenUsage,
+            isRunning = explorerState.isRunning,
+            displayStatus = explorerState.label,
+            tone = explorerState.tone
+        )
+    )
+}
+
+private enum class AgentStatusTone {
+    Running,
+    Error,
+    Hidden
+}
+
+private data class AgentStatusState(
+    val label: String,
+    val tone: AgentStatusTone,
+    val isRunning: Boolean
+)
+
+@Composable
+private fun statusPulse(): Float {
+    val transition = rememberInfiniteTransition(label = "statusPulse")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1600, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "statusPulseValue"
+    )
+    return pulse
+}
+
+private fun String?.toAgentStatusState(): AgentStatusState {
+    val normalized = this?.trim()?.lowercase(Locale.ROOT).orEmpty()
+    return when (normalized) {
+        "active" ->
+            AgentStatusState("Working", AgentStatusTone.Running, true)
+        "systemError" ->
+            AgentStatusState("Error", AgentStatusTone.Error, false)
+        else ->
+            AgentStatusState("", AgentStatusTone.Hidden, false)
+    }
+}
+
+private fun AgentStatusUi.toSummaryStatusState(): AgentStatusState {
+    val states = listOf(navigator, explorer).map { it.toAgentStatusState() }
+    return when {
+        states.any { it.tone == AgentStatusTone.Error } -> AgentStatusState("Error", AgentStatusTone.Error, false)
+        states.any { it.tone == AgentStatusTone.Running } -> AgentStatusState("Working", AgentStatusTone.Running, true)
+        else -> AgentStatusState("", AgentStatusTone.Hidden, false)
+    }
 }
 
 private fun namedColor(name: String, dark: Long, light: Long): Color =
@@ -2060,7 +2312,11 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             tokenUsage = TokenUsageUi(
                 maxTokens = 32_000,
                 navigatorTokens = 7_800,
-                explorerTokens = 5_400
+                explorerTokens = 11_400
+            ),
+            status = AgentStatusUi(
+                navigator = "active",
+                explorer = ""
             ),
             shoakuId = "shoaku-preview-1"
         ),

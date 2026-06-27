@@ -66,7 +66,24 @@ appServer.stdout.on('data', async (chunk) => {
     }
 
     switch (message.method) {
-      case 'thread/tokenUsage/updated':
+      case 'thread/status/changed': {
+        const shoakuId = sessionToShoaku.get(message.params.threadId);
+        if (!shoakuId) {
+          break;
+        }
+
+        const status = chatByShoakuId.get(shoakuId).status;
+        const session = shoakuToSession.get(shoakuId);
+        if (message.params.threadId === session.navigatorThreadId) {
+          status.navigator = message.params.status.type;
+        } else {
+          status.explorer = message.params.status.type;
+        }
+        await syncShoakuLists(initializeParams.initializationOptions.filePath);
+        break;
+      }
+
+      case 'thread/tokenUsage/updated': {
         const shoakuId = sessionToShoaku.get(message.params.threadId);
         if (!shoakuId) {
           break;
@@ -91,12 +108,7 @@ appServer.stdout.on('data', async (chunk) => {
           }
         }
         break;
-    }
-
-    if (message.result?.turn?.id != null && pendingTurns.has(message.result.turn.id)) {
-      logWarn(`status changed.`)
-      const { id, callbacks } = pendingTurns.get(message.result.turn.id);
-      callbacks?.onItemStatusChanged(id, message.result.turn.status)
+      }
     }
 
     if (message.params?.turnId != null && pendingTurns.has(message.params.turnId)) {
@@ -125,6 +137,10 @@ async function startNewSession(goalItem) {
   const shoakuId = basename(workDir);
   chatByShoakuId.set(shoakuId, {
     messages: [],
+    status: {
+      navigator: '',
+      explorer: ''
+    },
     tokenUsage: {
       maxTokens: config?.defaultTokenBudget || 0,
       navigatorTokens: 0,
@@ -279,6 +295,10 @@ async function resumeSession(shoakuId) {
 
   chatByShoakuId.set(shoakuId, {
     messages: [],
+    status: {
+      navigator: '',
+      explorer: ''
+    },
     tokenUsage: {
       maxTokens: config?.defaultTokenBudget || 0,
       navigatorTokens: metaData.navigator.tokenUsage || 0,
@@ -337,7 +357,8 @@ async function syncShoakuLists(filePath) {
   for (const goal of lists) {
     if (goal.shoakuId) {
       goal.messages = chatByShoakuId.get(goal.shoakuId)?.messages;
-      goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage
+      goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage;
+      goal.status = chatByShoakuId.get(goal.shoakuId)?.status;
     }
   }
   process.stdout.write(

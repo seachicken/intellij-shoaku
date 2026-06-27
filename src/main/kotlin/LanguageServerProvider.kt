@@ -74,7 +74,8 @@ data class Item(
     val children: List<Item> = emptyList(),
     val shoakuId: String? = null,
     val messages: List<Message>? = emptyList(),
-    val tokenUsage: TokenUsageUi? = null
+    val tokenUsage: TokenUsageUi? = null,
+    val status: AgentStatusUi? = null
 )
 
 data class Message(
@@ -87,6 +88,11 @@ data class TokenUsageUi(
     val maxTokens: Int,
     val navigatorTokens: Int = 0,
     val explorerTokens: Int = 0
+)
+
+data class AgentStatusUi(
+    val navigator: String? = null,
+    val explorer: String? = null
 )
 
 data class ShoakuShowDiffParams(
