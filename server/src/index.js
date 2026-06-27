@@ -237,11 +237,15 @@ async function startNewSession(goalItem) {
   try {
     const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
     const lines = content.split('\n');
-    lines[goalItem.line] =
-      lines[goalItem.line].slice(0, goalItem.labelPosition.start)
-      + `[${shoakuId}]`
-      + lines[goalItem.line].slice(goalItem.labelPosition.end);
-    await writeFile(initializeParams.initializationOptions.filePath, lines.join('\n'), { encoding: 'utf8' });
+    // Avoid duplicate shoaku-id writing.
+    const currentLabel = lines[goalItem.line].slice(goalItem.labelPosition.start, goalItem.labelPosition.end);
+    if (currentLabel === '[shoaku]') {
+      lines[goalItem.line] =
+        lines[goalItem.line].slice(0, goalItem.labelPosition.start)
+        + `[${shoakuId}]`
+        + lines[goalItem.line].slice(goalItem.labelPosition.end);
+      await writeFile(initializeParams.initializationOptions.filePath, lines.join('\n'), { encoding: 'utf8' });
+    }
   } catch (e) {
     if (e.code !== 'ENOENT') {
       throw e;
