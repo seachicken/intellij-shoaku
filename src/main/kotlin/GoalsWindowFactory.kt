@@ -84,14 +84,22 @@ class GoalsWindowFactory : ToolWindowFactory {
                 project.service<ShoakuSettings>().state,
                 project,
                 onFilePathChange = { newPath ->
-                    LspServerManager.getInstance(project)
-                        .getServersForProvider(LanguageServerProvider::class.java)
-                        .first()
-                        .sendNotification { (it as AppLanguageServer).didChangeGoalsFilePath(DidChangeGoalsFilePath(newPath)) }
+                    project.sendNotificationToShoakuServer {
+                        it.didChangeGoalsFilePath(DidChangeGoalsFilePath(newPath))
+                    }
                 }
             )
         }
     }
+}
+
+private fun Project.sendNotificationToShoakuServer(
+    notification: (AppLanguageServer) -> Unit
+) {
+    val server = LspServerManager.getInstance(this)
+        .getServersForProvider(LanguageServerProvider::class.java)
+        .firstOrNull() ?: return
+    server.sendNotification { notification(it as AppLanguageServer) }
 }
 
 private val ChatSendIconKey = PathIconKey("/icons/send/send.svg", GoalsWindowFactory::class.java)
@@ -159,10 +167,9 @@ private fun MyToolWindowContent(
                         return@SessionListContent
                     }
                     project?.let {
-                        LspServerManager.getInstance(project)
-                            .getServersForProvider(LanguageServerProvider::class.java)
-                            .first()
-                            .sendNotification { (it as AppLanguageServer).startSession(StartSessionParams(session.shoakuId)) }
+                        project.sendNotificationToShoakuServer { server ->
+                            server.startSession(StartSessionParams(session.shoakuId))
+                        }
                     }
                     val key = session.sessionKey
                     if (key !in openSessionKeys) {
@@ -571,17 +578,14 @@ private fun SessionTodoPane(
                         title = "Suggested summary",
                         modifier = Modifier.fillMaxWidth(),
                         action = {
-                            OutlinedButton(
+                                    OutlinedButton(
                                 onClick = {
                                     project?.let {
-                                        LspServerManager.getInstance(project)
-                                            .getServersForProvider(LanguageServerProvider::class.java)
-                                            .first()
-                                            .sendNotification {
-                                                (it as AppLanguageServer).applyDiff(
-                                                    ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
-                                                )
-                                            }
+                                        project.sendNotificationToShoakuServer { server ->
+                                            server.applyDiff(
+                                                ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
+                                            )
+                                        }
                                     }
                                     session.shoakuId?.let { shoakuId ->
                                         viewModel.diffResponses.remove(shoakuId)
@@ -1177,17 +1181,14 @@ private fun sendSessionReply(
     }
 
     project?.let {
-        LspServerManager.getInstance(project)
-            .getServersForProvider(LanguageServerProvider::class.java)
-            .first()
-            .sendNotification {
-                (it as AppLanguageServer).reply(
-                    ReplyParams(
-                        shoakuId,
-                        instruction
-                    )
+        project.sendNotificationToShoakuServer { server ->
+            server.reply(
+                ReplyParams(
+                    shoakuId,
+                    instruction
                 )
-            }
+            )
+        }
     }
 }
 
