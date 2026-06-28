@@ -4,7 +4,7 @@
 
 The Navigator does not write code directly. Instead, it helps the user build understanding and make progress at their own pace, much like an experienced pair-programming partner.
 
-Meanwhile, the Explorer works in the background toward a complete implementation. By indirectly observing the Explorer's progress, the Navigator can offer better context, guidance, and support.
+Meanwhile, the Explorer works in the background toward a complete implementation. By observing the Explorer's progress indirectly, the Navigator can offer better context, guidance, and support.
 
 ```mermaid
 graph LR
