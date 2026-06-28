@@ -652,6 +652,7 @@ async function watchGoalsFileUpdates() {
       prevValidGoalsFilePath = filePath;
 
       await syncShoakuLists(filePath);
+
       activeGoalItem = findActiveParentItem(lists);
       if (goalInputBuilder) {
         goalInputBuilder.ingest({

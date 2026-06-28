@@ -72,7 +72,6 @@ describe('AgentInputBuilder', () => {
 
   test('does not build file change operations before debounce period', (t) => {
     let callCnt = 0;
-
     builder.onAgentInput((input) => {
       callCnt++;
     });
@@ -103,7 +102,6 @@ describe('AgentInputBuilder', () => {
 
   test('does not build goal change operations before debounce period', (t) => {
     let callCnt = 0;
-
     builder.onAgentInput((input) => {
       callCnt++;
     });
@@ -116,6 +114,29 @@ describe('AgentInputBuilder', () => {
     mock.timers.tick(999);
 
     assert.strictEqual(callCnt, 0);
+  });
+
+  test('does not build goal change operations when active goal has not changed', (t) => {
+    let callCnt = 0;
+    builder.onAgentInput((input) => {
+      callCnt++;
+    });
+
+    builder.ingest({
+      type: inputType.GOAL,
+      content: goalChangeEvent
+    });
+
+    mock.timers.tick(1000);
+
+    builder.ingest({
+      type: inputType.GOAL,
+      content: goalChangeEvent
+    });
+
+    mock.timers.tick(1000);
+
+    assert.strictEqual(callCnt, 1);
   });
 });
 

@@ -4,9 +4,10 @@ export const inputType = {
 }
 
 export default class AgentInputBuilder {
-  constructor(rootPath, debounceMs) {
+  constructor(rootPath, debounceMs, maxEvents = 20) {
     this.rootPath = rootPath;
     this.debounceMs = debounceMs;
+    this.maxEvents = maxEvents;
     this.listeners = [];
     this.events = [];
     this.timer;
@@ -17,11 +18,18 @@ export default class AgentInputBuilder {
   }
 
   ingest(event) {
+    if (this.events.length > 0 && JSON.stringify(event) === JSON.stringify(this.events.at(-1))) {
+      return;
+    }
+
+    if (this.events.length >= this.maxEvents) {
+      this.events.shift();
+    }
     this.events.push(event);
 
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
-      let lastOperation;
+      let lastOperation = null;
       for (const event of this.events) {
         switch (event.type) {
           case inputType.LSP:
@@ -42,11 +50,12 @@ export default class AgentInputBuilder {
         case inputType.LSP:
           if (lastOperation) {
             for (const listener of this.listeners) {
-              listener(`
-Driver operations:
-${lastOperation}
-              `.trim());
+              listener([
+                'Driver operations:',
+                lastOperation,
+              ].join('\n'));
             }
+            lastOperation = null;
           }
           break;
         case inputType.GOAL:
@@ -54,6 +63,7 @@ ${lastOperation}
             for (const listener of this.listeners) {
               listener(lastOperation);
             }
+            lastOperation = null;
           }
           break;
       }
