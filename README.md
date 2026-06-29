@@ -19,5 +19,5 @@ This project exists to keep development human-paced, understandable, and owned.
 This plugin uses Codex CLI under the hood. See [architecture.md](https://github.com/seachicken/intellij-shoaku/blob/main/docs/architecture.md) for details.
 
 - [Codex CLI](https://developers.openai.com/codex/cli)
-- Node.js 24 or later
+- Node.js 22 or later
 <!-- Plugin description end -->

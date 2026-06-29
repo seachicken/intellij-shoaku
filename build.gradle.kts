@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.1.2"
+version = "0.1.3"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -84,5 +84,11 @@ intellijPlatform {
 tasks {
     wrapper {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
+    }
+
+    buildPlugin {
+        from(layout.projectDirectory.dir("server/dist")) {
+            into("node-module")
+        }
     }
 }
