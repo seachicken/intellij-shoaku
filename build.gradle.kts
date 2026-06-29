@@ -53,13 +53,9 @@ intellijPlatform {
         }
 
         changeNotes = """
-            <h2>Improvements</h2>
-            <ul>
-                <li>UI improvements</li>
-            </ul>
             <h2>Bug Fixes</h2>
             <ul>
-                <li>Fix thread state management</li>
+                <li>Fix shoaku-server execution error</li>
             </ul>
         """.trimIndent()
     }
