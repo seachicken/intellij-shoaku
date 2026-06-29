@@ -1,7 +1,7 @@
 package shoaku
 
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.ide.plugins.PluginManager
+import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -9,6 +9,7 @@ import com.intellij.platform.lsp.api.Lsp4jClient
 import com.intellij.platform.lsp.api.LspServerNotificationsHandler
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
+import java.nio.file.Files
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
 
 class LanguageServerProvider : LspServerSupportProvider {
@@ -31,8 +32,13 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
     override fun createCommandLine(): GeneralCommandLine {
 //        val basePath = project.basePath ?: error("Project base path is not available")
 //        return GeneralCommandLine("node", "$basePath/server/src/index.js")
-        val plugin = PluginManager.getPluginByClass(this::class.java)
-        val serverPath = plugin!!.pluginPath.resolve("node-module/shoaku-server.js")
+        val pluginJar = requireNotNull(PathManager.getJarForClass(this::class.java)) {
+            "Failed to locate plugin jar for ${this::class.java.name}"
+        }
+        val serverPath = pluginJar.parent.parent.resolve("node-module/shoaku-server.js")
+        require(Files.isRegularFile(serverPath)) {
+            "Failed to locate bundled server: $serverPath"
+        }
         return GeneralCommandLine("node", serverPath.toString())
     }
 
