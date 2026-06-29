@@ -112,4 +112,8 @@ tasks {
             into("node-module")
         }
     }
+
+    publishPlugin {
+        dependsOn(buildPlugin)
+    }
 }
