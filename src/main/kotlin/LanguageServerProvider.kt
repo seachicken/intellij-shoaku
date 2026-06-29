@@ -1,9 +1,8 @@
 package shoaku
 
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.ide.plugins.PluginManager
 import com.intellij.openapi.components.service
-import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.Lsp4jClient
@@ -32,7 +31,7 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
     override fun createCommandLine(): GeneralCommandLine {
 //        val basePath = project.basePath ?: error("Project base path is not available")
 //        return GeneralCommandLine("node", "$basePath/server/src/index.js")
-        val plugin = PluginManagerCore.getPlugin(PluginId.getId("shoaku.intellij-shoaku"))
+        val plugin = PluginManager.getPluginByClass(this::class.java)
         val serverPath = plugin!!.pluginPath.resolve("node-module/shoaku-server.js")
         return GeneralCommandLine("node", serverPath.toString())
     }
