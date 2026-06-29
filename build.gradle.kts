@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.1.3-beta.5"
+version = "0.1.3-beta.6"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -113,7 +113,7 @@ tasks {
         }
     }
 
-    publishPlugin {
-        dependsOn(buildPlugin)
-    }
+//    publishPlugin {
+//        dependsOn(buildPlugin)
+//    }
 }
