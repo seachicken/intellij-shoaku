@@ -12,13 +12,22 @@ jobs:
       run:
         working-directory: server
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version-file: 'server/.nvmrc'
-      - run: npm test
-      - run: npm ci
-      - run: npm run build
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - uses: actions/setup-node@v6
+      with:
+        node-version-file: 'server/.nvmrc'
+
+    - run: npm test
+    - run: npm ci
+    - run: npm run build
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: server-dist
+        path: server/dist
 
   publish-plugin:
     needs: build-node
@@ -32,6 +41,11 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: server-dist
+        path: server/dist
 
     - name: Setup Java
       uses: actions/setup-java@v4
