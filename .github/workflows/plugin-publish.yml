@@ -6,7 +6,7 @@ on:
       - "v*"
 
 jobs:
-  node-build:
+  build-node:
     runs-on: ubuntu-latest
     defaults:
       run:
