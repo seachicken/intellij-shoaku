@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.1.3-beta.2"
+version = "0.1.3-beta.3"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -82,13 +82,34 @@ intellijPlatform {
 }
 
 tasks {
+//    val buildServer by registering(Exec::class) {
+//        workingDir = layout.projectDirectory.dir("server").asFile
+//        commandLine("npm", "run", "build")
+//
+//        inputs.files(
+//            layout.projectDirectory.file("server/package.json"),
+//            layout.projectDirectory.file("server/package-lock.json"),
+//            layout.projectDirectory.file("server/rolldown.config.js"),
+//        )
+//        inputs.dir(layout.projectDirectory.dir("server/src"))
+//        outputs.dir(layout.projectDirectory.dir("server/dist"))
+//    }
+
     wrapper {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
     }
 
-    prepareSandbox {
+//    prepareSandbox {
+////        dependsOn(buildServer)
+//        from(layout.projectDirectory.dir("server/dist")) {
+//            into(pluginName.map { "$it/node-module" })
+//        }
+//    }
+
+    buildPlugin {
+//        dependsOn(buildServer)
         from(layout.projectDirectory.dir("server/dist")) {
-            into(pluginName.map { "$it/node-module" })
+            into("node-module")
         }
     }
 }
