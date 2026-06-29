@@ -1,7 +1,9 @@
 package shoaku
 
 import com.intellij.execution.configurations.GeneralCommandLine
+import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.components.service
+import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.platform.lsp.api.Lsp4jClient
@@ -9,13 +11,8 @@ import com.intellij.platform.lsp.api.LspServerNotificationsHandler
 import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
-import shoaku.LanguageServerProvider.Companion.SERVER_VERSION
 
 class LanguageServerProvider : LspServerSupportProvider {
-    companion object {
-        const val SERVER_VERSION = "0.2.2"
-    }
-
     override fun fileOpened(
         project: Project,
         file: VirtualFile,
@@ -35,7 +32,9 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
     override fun createCommandLine(): GeneralCommandLine {
 //        val basePath = project.basePath ?: error("Project base path is not available")
 //        return GeneralCommandLine("node", "$basePath/server/src/index.js")
-        return GeneralCommandLine("npx", "@seachicken/shoaku-server@${SERVER_VERSION}")
+        val plugin = PluginManagerCore.getPlugin(PluginId.getId("shoaku.intellij-shoaku"))
+        val serverPath = plugin!!.pluginPath.resolve("node-module/shoaku-server.js")
+        return GeneralCommandLine("node", serverPath.toString())
     }
 
     override fun createInitializationOptions(): Any {
