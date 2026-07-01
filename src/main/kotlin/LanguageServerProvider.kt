@@ -30,16 +30,20 @@ private open class AppLanguageServerDescriptor(project: Project, name: String) :
 
 private class LanguageServerDescriptor(project: Project) : AppLanguageServerDescriptor(project, "Shoaku") {
     override fun createCommandLine(): GeneralCommandLine {
-//        val basePath = project.basePath ?: error("Project base path is not available")
-//        return GeneralCommandLine("node", "$basePath/server/src/index.js")
-        val pluginJar = requireNotNull(PathManager.getJarForClass(this::class.java)) {
-            "Failed to locate plugin jar for ${this::class.java.name}"
+        // Allow paths to be overridden so that script changes can be applied immediately during development.
+        val localServerPath = System.getenv("SHOAKU_SERVER_PATH")
+        if (localServerPath.isNullOrBlank()) {
+            val pluginJar = requireNotNull(PathManager.getJarForClass(this::class.java)) {
+                "Failed to locate plugin jar for ${this::class.java.name}"
+            }
+            val serverPath = pluginJar.parent.parent.resolve("node-module/shoaku-server.js")
+            require(Files.isRegularFile(serverPath)) {
+                "Failed to locate bundled server: $serverPath"
+            }
+            return GeneralCommandLine("node", serverPath.toString())
+        } else {
+            return GeneralCommandLine("node", localServerPath)
         }
-        val serverPath = pluginJar.parent.parent.resolve("node-module/shoaku-server.js")
-        require(Files.isRegularFile(serverPath)) {
-            "Failed to locate bundled server: $serverPath"
-        }
-        return GeneralCommandLine("node", serverPath.toString())
     }
 
     override fun createInitializationOptions(): Any {
