@@ -88,8 +88,10 @@ data class Item(
 
 data class Message(
     val type: String,
+    val phase: String? = null,
     val text: String? = null,
-    val command: String? = null
+    val command: String? = null,
+    val alignmentScore: Double? = null
 )
 
 data class TokenUsageUi(
