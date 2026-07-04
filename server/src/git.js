@@ -5,7 +5,7 @@ const exec = promisify(child_process.exec);
 
 export async function cleanupStaleBranches(workspacePath, {
   branchListFun = async (workspacePath) => await exec(`git -C ${workspacePath} branch --format="%(refname)"`),
-  worktreeListFun = async (workspacePath) => await exec(`git -C ${workspacePath} worktree prune`),
+  worktreeListFun = async (workspacePath) => await exec(`git -C ${workspacePath} worktree list --porcelain`),
   branchDeleteFun = async (workspacePath, branches) => await exec(`git -C ${workspacePath} branch -D ${branches}`),
   worktreeDeleteFun = async (workspacePath, worktreePath) => await exec(`git -C ${workspacePath} worktree remove --force ${worktreePath}`),
 } = {}) {
