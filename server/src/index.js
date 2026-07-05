@@ -343,11 +343,20 @@ async function resumeSession(shoakuId) {
       includeTurns: true
     }).then(async (res) => {
       for (const turn of res.result.thread.turns) {
-        for (const item of turn.items) {
+        for (let item of turn.items) {
           if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE_ALL]')) {
             break;
           }
 
+          if (typeof item.text === 'string') {
+            try {
+              item = {
+                ...item,
+                ...JSON.parse(item.text)
+              };
+            } catch(_) {
+            }
+          }
           appendChatHistory(sessionToShoaku.get(navigatorThreadId), turn.id, item);
         }
       }
@@ -501,12 +510,16 @@ process.stdin.on('data', async (chunk) => {
               }
             }, {
                 onItemCompleted: async (id, params) => {
-                  const response = typeof params.item.text === 'string'
-                    ? {
+                  let response = params.item;
+                  if (typeof item.text === 'string') {
+                    try {
+                      response = {
                         ...params.item,
                         ...JSON.parse(params.item.text)
-                      }
-                    : params.item;
+                      };
+                    } catch(_) {
+                    }
+                  }
                   appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
                   await syncShoakuLists(initializeParams.initializationOptions.filePath);
                 }
@@ -539,18 +552,59 @@ process.stdin.on('data', async (chunk) => {
                       }
 
                       if (params.item.text) {
+                        // FIXME: Duplicate code
                         startTurn({
-                          threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
+                          threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
                           input: [
                             {
                               type: 'text',
                               text: [
-                                '[Shoaku:IGNORE_ALL]',
-                                `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+                                '[Shoaku:IGNORE]',
+                                'If you feel that the user\'s current task and coding direction are unclear or inappropriate, please confirm in a short sentence whether there is any misunderstanding.'
                               ].join('\n')
                             }
-                          ]}
+                          ],
+                          outputSchema: {
+                            type: 'object',
+                            properties: {
+                              text: {
+                                type: 'string'
+                              },
+                              alignmentScore: {
+                                description: 'To achieve the goal, the degree of alignment between the user and the agent on what to do next is quantified on a scale from 0 to 1.',
+                                type: 'number'
+                              }
+                            },
+                            required: [ 'text', 'alignmentScore' ],
+                            additionalProperties: false
+                          }
+                        }, {
+                            onItemCompleted: async (id, params) => {
+                              const response = typeof params.item.text === 'string'
+                                ? {
+                                    ...params.item,
+                                    ...JSON.parse(params.item.text)
+                                  }
+                                : params.item;
+                              appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
+                              await syncShoakuLists(initializeParams.initializationOptions.filePath);
+                            }
+                          }
                         );
+
+                        //startTurn({
+                        //  threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
+                        //  input: [
+                        //    {
+                        //      type: 'text',
+                        //      text: [
+                        //        '[Shoaku:IGNORE_ALL]',
+                        //        `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+                        //      ].join('\n')
+                        //    }
+                        //  ]}
+                        //);
+
                         goalByShoakuId.set(input.shoakuId, params.item.text);
                       }
                     }
