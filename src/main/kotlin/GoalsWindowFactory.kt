@@ -631,8 +631,7 @@ private fun SessionTaskPane(
     }
 }
 
-private const val AlignmentGapMessageThreshold = 0.3
-private const val AlignmentGapReassuringMessage = "Direction looks good"
+private const val AlignmentGapReassuringMessage = "Aligned with goal"
 
 private enum class TodoRowEmphasis {
     Default,
@@ -649,8 +648,8 @@ private fun TaskListCard(
     alignmentScore: Double?,
     modifier: Modifier = Modifier
 ) {
-    val displayMessage = remember(latestAgentMessage, alignmentScore) {
-        reassuringAlignmentMessage(alignmentScore) ?: latestAgentMessage
+    val displayMessage = remember(latestAgentMessage) {
+        reassuringAlignmentMessage(latestAgentMessage) ?: latestAgentMessage
     }
     Column(
         modifier = modifier
@@ -782,9 +781,9 @@ private fun AttachedResponseCard(
 }
 
 private fun reassuringAlignmentMessage(
-    alignmentScore: Double?
+    message: String?
 ): String? {
-    if (alignmentScore == null || alignmentScore < AlignmentGapMessageThreshold) {
+    if (!message.isNullOrBlank()) {
         return null
     }
     return AlignmentGapReassuringMessage
@@ -836,13 +835,24 @@ private fun ChatDock(
             ) {
                 itemsIndexed(messages) { index, entry ->
                     val previousEntry = messages.getOrNull(index - 1)
+                    val startsNewTurn =
+                        entry.turnId != null &&
+                        entry.type != "userMessage" &&
+                        entry.turnId != previousEntry?.turnId
                     val previousIsSameSpeaker =
-                        previousEntry?.type == entry.type && previousEntry.command == null && entry.command == null
+                        previousEntry?.type == entry.type &&
+                        previousEntry.turnId == entry.turnId &&
+                        previousEntry.command == null &&
+                        entry.command == null
 
                     ChatEntryRow(
                         entry = entry,
-                        isFirstInGroup = !previousIsSameSpeaker,
-                        topSpacing = if (previousIsSameSpeaker) 4.dp else 10.dp
+                        showTurnDivider = startsNewTurn,
+                        topSpacing = when {
+                            startsNewTurn -> 18.dp
+                            previousIsSameSpeaker -> 6.dp
+                            else -> 12.dp
+                        }
                     )
                 }
             }
@@ -1688,11 +1698,15 @@ private fun ScrollHintLazyColumn(
 @Composable
 private fun ChatEntryRow(
     entry: Message,
-    isFirstInGroup: Boolean,
+    showTurnDivider: Boolean,
     topSpacing: Dp
 ) {
     if (entry.command != null) {
-        ChatActivityRow(entry = entry, topSpacing = topSpacing)
+        ChatActivityRow(
+            entry = entry,
+            showTurnDivider = showTurnDivider,
+            topSpacing = topSpacing
+        )
         return
     }
 
@@ -1704,13 +1718,8 @@ private fun ChatEntryRow(
             .padding(top = topSpacing),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        if (!isUser && isFirstInGroup) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(TodoColors.agentMessageDivider)
-            )
+        if (showTurnDivider) {
+            ChatTurnDivider()
         }
 
         Row(
@@ -1739,6 +1748,16 @@ private fun ChatEntryRow(
             }
         }
     }
+}
+
+@Composable
+private fun ChatTurnDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(TodoColors.agentMessageDivider)
+    )
 }
 
 @Composable
@@ -2061,16 +2080,20 @@ private fun headingFontSize(level: Int) = when (level) {
 @Composable
 private fun ChatActivityRow(
     entry: Message,
+    showTurnDivider: Boolean,
     topSpacing: Dp
 ) {
     val command = entry.command ?: return
     val verb = if (entry.type == "webSearch") "Searched" else "Ran"
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = topSpacing),
-        horizontalArrangement = Arrangement.Start
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        if (showTurnDivider) {
+            ChatTurnDivider()
+        }
         Text(
             text = "$verb $command",
             fontSize = 11.sp,

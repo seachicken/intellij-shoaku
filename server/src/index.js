@@ -490,7 +490,8 @@ process.stdin.on('data', async (chunk) => {
                   type: 'text',
                   text: [
                     '[Shoaku:IGNORE]',
-                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, please confirm in a short sentence whether there is any misunderstanding.'
+                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
+                    'If the tasks are aligned, return a blank.'
                   ].join('\n')
                 }
               ],
@@ -501,7 +502,9 @@ process.stdin.on('data', async (chunk) => {
                     type: 'string'
                   },
                   alignmentScore: {
-                    description: 'To achieve the goal, the degree of alignment between the user and the agent on what to do next is quantified on a scale from 0 to 1.',
+                    description: [
+                      'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
+                    ].join('\n'),
                     type: 'number'
                   }
                 },
@@ -511,10 +514,10 @@ process.stdin.on('data', async (chunk) => {
             }, {
                 onItemCompleted: async (id, params) => {
                   let response = params.item;
-                  if (typeof item.text === 'string') {
+                  if (typeof response.text === 'string') {
                     try {
                       response = {
-                        ...params.item,
+                        ...response,
                         ...JSON.parse(params.item.text)
                       };
                     } catch(_) {

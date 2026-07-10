@@ -88,6 +88,7 @@ data class Item(
 
 data class Message(
     val type: String,
+    val turnId: String? = null,
     val phase: String? = null,
     val text: String? = null,
     val command: String? = null,
