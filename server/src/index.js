@@ -384,7 +384,7 @@ async function syncShoakuLists(filePath) {
     }
   }
   process.stdout.write(
-    buildNotification('shoaku/notification', {
+    buildNotification('shoaku/syncGoals', {
       lists
     })
   );
@@ -491,7 +491,7 @@ process.stdin.on('data', async (chunk) => {
                   text: [
                     '[Shoaku:IGNORE]',
                     'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                    'If the tasks are aligned, return a blank.'
+                    'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
                   ].join('\n')
                 }
               ],
@@ -563,7 +563,8 @@ process.stdin.on('data', async (chunk) => {
                               type: 'text',
                               text: [
                                 '[Shoaku:IGNORE]',
-                                'If you feel that the user\'s current task and coding direction are unclear or inappropriate, please confirm in a short sentence whether there is any misunderstanding.'
+                                'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
+                                'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
                               ].join('\n')
                             }
                           ],
@@ -574,7 +575,9 @@ process.stdin.on('data', async (chunk) => {
                                 type: 'string'
                               },
                               alignmentScore: {
-                                description: 'To achieve the goal, the degree of alignment between the user and the agent on what to do next is quantified on a scale from 0 to 1.',
+                                description: [
+                                  'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
+                                ].join('\n'),
                                 type: 'number'
                               }
                             },
@@ -591,6 +594,12 @@ process.stdin.on('data', async (chunk) => {
                                 : params.item;
                               appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
                               await syncShoakuLists(initializeParams.initializationOptions.filePath);
+
+                              process.stdout.write(
+                                buildNotification('shoaku/notify', {
+                                  text: chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.at(-1)?.text
+                                })
+                              );
                             }
                           }
                         );

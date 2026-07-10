@@ -470,7 +470,7 @@ private fun SessionDetailContent(
 @Composable
 private fun SessionDetailSplitter(
     session: Item,
-    diffResponse: ShoakuShowDiffParams?,
+    diffResponse: ShowDiffParams?,
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?,
@@ -545,7 +545,7 @@ private fun SessionDetailSplitter(
 @Composable
 private fun SessionTaskPane(
     session: Item,
-    diffResponse: ShoakuShowDiffParams?,
+    diffResponse: ShowDiffParams?,
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?,
@@ -555,7 +555,7 @@ private fun SessionTaskPane(
     val remainingCount = todoItems.count { it.checked == false }
     val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
     val messages = session.messages.orEmpty()
-    val latestAgentMessage = remember(messages) { latestAgentMessage(messages) }
+    val taskResponse = remember(messages) { taskResponseDisplay(messages) }
     Column(
         modifier = modifier
             .background(TodoColors.sectionSurface, RoundedCornerShape(8.dp))
@@ -594,8 +594,7 @@ private fun SessionTaskPane(
                 TaskListCard(
                     todoItems = todoItems,
                     activeItemIndex = activeItemIndex,
-                    latestAgentMessage = latestAgentMessage?.text,
-                    alignmentScore = latestAgentMessage?.alignmentScore
+                    response = taskResponse
                 )
             }
             if (diffResponse?.response?.isNotBlank() == true) {
@@ -631,7 +630,13 @@ private fun SessionTaskPane(
     }
 }
 
+private const val AlignmentGapMessageThreshold = 0.9
 private const val AlignmentGapReassuringMessage = "Aligned with goal"
+
+private data class TaskResponseDisplay(
+    val text: String,
+    val isThinking: Boolean = false
+)
 
 private enum class TodoRowEmphasis {
     Default,
@@ -644,13 +649,9 @@ private enum class TodoRowEmphasis {
 private fun TaskListCard(
     todoItems: List<Item>,
     activeItemIndex: Int,
-    latestAgentMessage: String?,
-    alignmentScore: Double?,
+    response: TaskResponseDisplay?,
     modifier: Modifier = Modifier
 ) {
-    val displayMessage = remember(latestAgentMessage) {
-        reassuringAlignmentMessage(latestAgentMessage) ?: latestAgentMessage
-    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -669,7 +670,7 @@ private fun TaskListCard(
                     when {
                         index == activeItemIndex -> CurrentTaskGroup(
                             title = model.content,
-                            message = displayMessage,
+                            response = response,
                         )
                         model.checked == true -> TodoRow(
                             title = model.content,
@@ -697,10 +698,10 @@ private fun TaskListCard(
 @Composable
 private fun CurrentTaskGroup(
     title: String,
-    message: String?,
+    response: TaskResponseDisplay?,
     modifier: Modifier = Modifier
 ) {
-    val hasMessage = message?.trim().isNullOrEmpty().not()
+    val hasMessage = response != null
     Box(
         modifier = modifier.fillMaxWidth()
     ) {
@@ -726,7 +727,7 @@ private fun CurrentTaskGroup(
                 emphasis = TodoRowEmphasis.Default
             )
             AttachedResponseCard(
-                message = message,
+                response = response,
                 modifier = Modifier.padding(start = 18.dp)
             )
             if (hasMessage) {
@@ -738,11 +739,12 @@ private fun CurrentTaskGroup(
 
 @Composable
 private fun AttachedResponseCard(
-    message: String?,
+    response: TaskResponseDisplay?,
     modifier: Modifier = Modifier
 ) {
-    val displayText = message?.trim().orEmpty()
+    val displayText = response?.text?.trim().orEmpty()
     val hasMessage = displayText.isNotEmpty()
+    val isThinking = response?.isThinking == true
 
     Column(
         modifier = modifier
@@ -766,28 +768,34 @@ private fun AttachedResponseCard(
                     .border(1.dp, TodoColors.attachedResponseBorder, RoundedCornerShape(14.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
-                if (displayText == AlignmentGapReassuringMessage) {
-                    Text(
-                        text = displayText,
-                        color = TodoColors.secondaryText,
-                        fontSize = 12.sp
-                    )
-                } else {
-                    AgentMessageContent(message = displayText)
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (isThinking) {
+                        StatusPill(
+                            label = "Thinking",
+                            tone = AgentStatusTone.Running,
+                            pulse = statusPulse(),
+                            minWidth = Dp.Unspecified
+                        )
+                    }
+                    if (displayText == AlignmentGapReassuringMessage) {
+                        Text(
+                            text = displayText,
+                            color = TodoColors.secondaryText,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        AgentMessageContent(message = displayText)
+                    }
                 }
             }
         }
     }
 }
 
-private fun reassuringAlignmentMessage(
-    message: String?
-): String? {
-    if (!message.isNullOrBlank()) {
-        return null
-    }
-    return AlignmentGapReassuringMessage
-}
+private fun reassuringAlignmentMessage(alignmentScore: Double?): String? =
+    if (alignmentScore != null && alignmentScore >= AlignmentGapMessageThreshold) AlignmentGapReassuringMessage else null
 
 @Composable
 private fun ChatDock(
@@ -982,6 +990,38 @@ private fun ChatHeader(
 
 private fun latestAgentMessage(messages: List<Message>): Message? =
     messages.lastOrNull { it.type == "agentMessage" && it.phase == "final_answer" && !it.text.isNullOrBlank() }
+
+private fun taskResponseDisplay(messages: List<Message>): TaskResponseDisplay? {
+    val latestFinalMessage = latestAgentMessage(messages)
+    val latestNonUserEntry = messages.lastOrNull { it.type != "userMessage" } ?: return null
+    if (latestNonUserEntry.turnId != null && latestNonUserEntry.turnId != latestFinalMessage?.turnId) {
+        val currentTurnEntries = messages.filter { it.turnId == latestNonUserEntry.turnId && it.type != "userMessage" }
+        val currentTurnText = currentTurnEntries
+            .lastOrNull { !it.text.isNullOrBlank() }
+            ?.text
+            ?.trim()
+            .orEmpty()
+            .ifBlank {
+                currentTurnEntries.lastOrNull()?.let { entry ->
+                    when {
+                        !entry.command.isNullOrBlank() && entry.type == "webSearch" -> "Searching: ${entry.command}"
+                        !entry.command.isNullOrBlank() -> "Running: ${entry.command}"
+                        else -> "Thinking..."
+                    }
+                }.orEmpty()
+            }
+        if (currentTurnText.isNotBlank()) {
+            return TaskResponseDisplay(text = currentTurnText, isThinking = true)
+        }
+    }
+
+    val finalText = reassuringAlignmentMessage(latestFinalMessage?.alignmentScore)
+        ?: latestFinalMessage?.text?.trim().orEmpty()
+    if (finalText.isBlank()) {
+        return null
+    }
+    return TaskResponseDisplay(text = finalText)
+}
 
 @Composable
 private fun TokenUsageIndicator(
@@ -2429,9 +2469,9 @@ private object TodoColors {
     private val activityGlowEnd = Color(0xFF6867C7)
     val statusRunningText = namedColor("Label.foreground", 0xFFF1E9FB, 0xFF5A3C78)
     val currentTaskConnector = componentBorder.copy(alpha = 0.72f)
-    val currentTaskConnectorSoft = componentBorder.copy(alpha = 0.56f)
-    val attachedResponseSurface = overlay(infoBackground.copy(alpha = 0.1f), blend(listBackground, panelBackground, 0.38f))
-    val attachedResponseBorder = componentBorder.copy(alpha = 0.68f)
+    val currentTaskConnectorSoft = componentBorder.copy(alpha = 0.42f)
+    val attachedResponseSurface = overlay(componentBorder.copy(alpha = 0.08f), blend(listBackground, panelBackground, 0.18f))
+    val attachedResponseBorder = componentBorder.copy(alpha = 0.56f)
     private val mutedPendingSurface = overlay(infoBackground.copy(alpha = 0.04f), blend(panelBackground, listBackground, 0.76f))
     private val mutedPendingBorder = componentBorder.copy(alpha = 0.58f)
 
@@ -2682,7 +2722,7 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             shoakuId = "shoaku-preview-2"
         )
     )
-    diffResponses["shoaku-preview-1"] = ShoakuShowDiffParams(
+    diffResponses["shoaku-preview-1"] = ShowDiffParams(
         shoakuId = "shoaku-preview-1",
         response = "- Extract common setup\n- Reuse validated command sequence",
         diff = """

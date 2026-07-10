@@ -1,6 +1,8 @@
 package shoaku
 
 import com.intellij.execution.configurations.GeneralCommandLine
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
@@ -53,15 +55,25 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
     }
 
     override fun createLsp4jClient(handler: LspServerNotificationsHandler) = object : Lsp4jClient(handler) {
-        @JsonNotification("shoaku/notification")
-        fun shoaku(params: ShoakuNotificationParams) {
+        @JsonNotification("shoaku/syncGoals")
+        fun syncGoals(params: SyncGoalsParams) {
             project.service<ShoakuSettings>().viewModel.apply {
                 items = params.lists
             }
         }
 
+        @JsonNotification("shoaku/notify")
+        fun shoaku(params: NotifyParams) {
+            if (params.text.isNullOrBlank()) {
+                return
+            }
+
+            Notification("Shoaku", params.text, NotificationType.INFORMATION)
+                .notify(project)
+        }
+
         @JsonNotification("shoaku/showDiff")
-        fun showDiff(params: ShoakuShowDiffParams) {
+        fun showDiff(params: ShowDiffParams) {
             project.service<ShoakuSettings>().viewModel.apply {
                 if (params.response.isNotBlank()) {
                     diffResponses[params.shoakuId] = params
@@ -71,7 +83,7 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
     }
 }
 
-data class ShoakuNotificationParams(
+data class SyncGoalsParams(
     val lists: List<Item>
 )
 
@@ -106,7 +118,11 @@ data class AgentStatusUi(
     val explorer: String? = null
 )
 
-data class ShoakuShowDiffParams(
+data class NotifyParams(
+    val text: String? = null
+)
+
+data class ShowDiffParams(
     val shoakuId: String,
     val response: String,
     val diff: String
