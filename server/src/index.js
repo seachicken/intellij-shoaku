@@ -207,7 +207,7 @@ async function startNewSession(goalItem) {
                 'As a pair programming navigator, you will help the user understand the process.',
                 '',
                 'Interaction policy:',
-                '- If you feel that the user\'s current task and coding direction are unclear or inappropriate, please confirm in a short sentence whether there is any misunderstanding.',
+                '- Instead of suggesting implementation methods to the user, you should briefly pose a question.',
                 `- You can reference a temporary working directory "${workDir}" when proposing code, but you behave to the user as if the working directory does not exist.`,
                 '',
                 'Input handling:',
@@ -380,7 +380,7 @@ async function syncShoakuLists(filePath) {
     if (goal.shoakuId) {
       goal.messages = chatByShoakuId.get(goal.shoakuId)?.messages;
       goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage;
-      goal.status = chatByShoakuId.get(goal.shoakuId)?.status;
+      goal.status = effectiveStatus(goal.shoakuId);
     }
   }
   process.stdout.write(
@@ -389,6 +389,29 @@ async function syncShoakuLists(filePath) {
     })
   );
   return lists;
+}
+
+function hasPendingTurn(threadId) {
+  if (!threadId) {
+    return false;
+  }
+  return (pendingTurns.get(threadId)?.size || 0) > 0;
+}
+
+function effectiveStatus(shoakuId) {
+  const baseStatus = chatByShoakuId.get(shoakuId)?.status || {
+    navigator: '',
+    explorer: ''
+  };
+  const session = shoakuToSession.get(shoakuId);
+  if (!session) {
+    return baseStatus;
+  }
+
+  return {
+    navigator: hasPendingTurn(session.navigatorThreadId) ? 'active' : baseStatus.navigator,
+    explorer: hasPendingTurn(session.explorerThreadId) ? 'active' : baseStatus.explorer
+  };
 }
 
 let appErrBuf = Buffer.alloc(0);
@@ -592,14 +615,16 @@ process.stdin.on('data', async (chunk) => {
                                     ...JSON.parse(params.item.text)
                                   }
                                 : params.item;
-                              appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
+                              const message = appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
                               await syncShoakuLists(initializeParams.initializationOptions.filePath);
 
-                              process.stdout.write(
-                                buildNotification('shoaku/notify', {
-                                  text: chatByShoakuId.get(sessionToShoaku.get(params.threadId))?.messages.at(-1)?.text
-                                })
-                              );
+                              if (message != null) {
+                                process.stdout.write(
+                                  buildNotification('shoaku/notify', {
+                                    text: message.text
+                                  })
+                                );
+                              }
                             }
                           }
                         );
@@ -871,13 +896,13 @@ function findActiveItem(lists) {
 
 function appendChatHistory(shoakuId, turnId, item) {
   if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE]')) {
-    return;
+    return null;
   }
   if (!item.text && !(item.content?.length > 0) && !item.command && !item.query) {
-    return;
+    return null;
   }
 
-  chatByShoakuId.get(shoakuId)?.messages.push({
+  const message = {
     turnId,
     type: item.type,
     phase: item.phase,
@@ -885,7 +910,10 @@ function appendChatHistory(shoakuId, turnId, item) {
       item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
     command: item.command || item.query,
     alignmentScore: item.alignmentScore
-  });
+  };
+  chatByShoakuId.get(shoakuId)?.messages.push(message);
+
+  return message;
 }
 
 const pendingTurns = new Map();
