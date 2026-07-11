@@ -1495,7 +1495,7 @@ private fun ChatComposer(
                 decorationBox = { innerTextField ->
                     if (value.text.isEmpty()) {
                         Text(
-                            text = "Reply briefly or answer a question",
+                            text = "Ask Shoaku",
                             color = TodoColors.secondaryText.copy(alpha = 0.75f),
                             fontSize = 13.sp
                         )
@@ -1521,7 +1521,7 @@ private fun ChatComposer(
             }
         }
         Text(
-            text = "Keep replies short. Enter sends.",
+            text = "Enter to send  Shift+Enter for newline",
             color = TodoColors.secondaryText.copy(alpha = 0.72f),
             fontSize = 11.sp
         )

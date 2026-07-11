@@ -377,7 +377,7 @@ async function syncShoakuLists(filePath) {
     if (goal.shoakuId) {
       goal.messages = chatByShoakuId.get(goal.shoakuId)?.messages;
       goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage;
-      goal.status = effectiveStatus(goal.shoakuId);
+      goal.status = chatByShoakuId.get(goal.shoakuId)?.status;
     }
   }
   process.stdout.write(
@@ -386,29 +386,6 @@ async function syncShoakuLists(filePath) {
     })
   );
   return lists;
-}
-
-function hasPendingTurn(threadId) {
-  if (!threadId) {
-    return false;
-  }
-  return (pendingTurns.get(threadId)?.size || 0) > 0;
-}
-
-function effectiveStatus(shoakuId) {
-  const baseStatus = chatByShoakuId.get(shoakuId)?.status || {
-    navigator: '',
-    explorer: ''
-  };
-  const session = shoakuToSession.get(shoakuId);
-  if (!session) {
-    return baseStatus;
-  }
-
-  return {
-    navigator: hasPendingTurn(session.navigatorThreadId) ? 'active' : baseStatus.navigator,
-    explorer: hasPendingTurn(session.explorerThreadId) ? 'active' : baseStatus.explorer
-  };
 }
 
 let appErrBuf = Buffer.alloc(0);
