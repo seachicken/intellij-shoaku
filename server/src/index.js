@@ -25,7 +25,6 @@ const sessionsDir = join(shoakuDir, 'sessions');
 const sessionToShoaku = new Map();
 const shoakuToSession = new Map();
 const chatByShoakuId = new Map();
-const goalByShoakuId = new Map();
 
 let config;
 let initializeParams;
@@ -154,7 +153,6 @@ async function startNewSession(goalItem) {
       explorerTokens: 0
     }
   });
-  goalByShoakuId.set(shoakuId, '');
 
   const [navigatorRes, explorerRes] = await Promise.all([
     sendAppRequest('thread/start', {
@@ -207,7 +205,7 @@ async function startNewSession(goalItem) {
                 'As a pair programming navigator, you will help the user understand the process.',
                 '',
                 'Interaction policy:',
-                '- If you feel that the user\'s current task and coding direction are unclear or inappropriate, please confirm in a short sentence whether there is any misunderstanding.',
+                '- Instead of suggesting implementation methods to the user, you should briefly pose a question.',
                 `- You can reference a temporary working directory "${workDir}" when proposing code, but you behave to the user as if the working directory does not exist.`,
                 '',
                 'Input handling:',
@@ -299,7 +297,6 @@ async function startNewSession(goalItem) {
 }
 
 async function resumeSession(shoakuId) {
-  goalByShoakuId.set(shoakuId, '');
   const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
   if (!metaData.navigator?.threadId || !metaData.explorer?.threadId) {
     logWarn(`Invalid session metadata for shoakuId ${shoakuId}`);
@@ -343,11 +340,20 @@ async function resumeSession(shoakuId) {
       includeTurns: true
     }).then(async (res) => {
       for (const turn of res.result.thread.turns) {
-        for (const item of turn.items) {
+        for (let item of turn.items) {
           if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE_ALL]')) {
             break;
           }
 
+          if (typeof item.text === 'string') {
+            try {
+              item = {
+                ...item,
+                ...JSON.parse(item.text)
+              };
+            } catch(_) {
+            }
+          }
           appendChatHistory(sessionToShoaku.get(navigatorThreadId), turn.id, item);
         }
       }
@@ -375,7 +381,7 @@ async function syncShoakuLists(filePath) {
     }
   }
   process.stdout.write(
-    buildNotification('shoaku/notification', {
+    buildNotification('shoaku/syncGoals', {
       lists
     })
   );
@@ -454,7 +460,6 @@ process.stdin.on('data', async (chunk) => {
           lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
           lspInputBuilder.onAgentInput(async (input) => {
             if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
-              logWarn(`No active goal item with shoakuId found, skipping didSave event processing. item: ${JSON.stringify(activeGoalItem)}`);
               return;
             }
 
@@ -481,7 +486,8 @@ process.stdin.on('data', async (chunk) => {
                   type: 'text',
                   text: [
                     '[Shoaku:IGNORE]',
-                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, please confirm in a short sentence whether there is any misunderstanding.'
+                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
+                    'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
                   ].join('\n')
                 }
               ],
@@ -492,7 +498,81 @@ process.stdin.on('data', async (chunk) => {
                     type: 'string'
                   },
                   alignmentScore: {
-                    description: 'To achieve the goal, the degree of alignment between the user and the agent on what to do next is quantified on a scale from 0 to 1.',
+                    description: [
+                      'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
+                    ].join('\n'),
+                    type: 'number'
+                  }
+                },
+                required: [ 'text', 'alignmentScore' ],
+                additionalProperties: false
+              }
+            }, {
+                onItemCompleted: async (id, params) => {
+                  let response = params.item;
+                  if (typeof response.text === 'string') {
+                    try {
+                      response = {
+                        ...response,
+                        ...JSON.parse(params.item.text)
+                      };
+                    } catch(_) {
+                    }
+                  }
+                  appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
+                  await syncShoakuLists(initializeParams.initializationOptions.filePath);
+                }
+              }
+            );
+          });
+
+          goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
+          goalInputBuilder.onAgentInput(async (input) => {
+            if (!input?.shoakuId || !shoakuToSession.has(input.shoakuId)) {
+              return;
+            }
+
+            await sendAppRequest('thread/inject_items', {
+              threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+              items: [
+                {
+                  type: 'message',
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'output_text',
+                      text: [
+                        `Current Goal/Tasks: "${JSON.stringify(input)}"`
+                      ].join('\n')
+                    }
+                  ]
+                }
+              ]
+            });
+
+            // FIXME: Duplicate code
+            startTurn({
+              threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+              input: [
+                {
+                  type: 'text',
+                  text: [
+                    '[Shoaku:IGNORE]',
+                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
+                    'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
+                  ].join('\n')
+                }
+              ],
+              outputSchema: {
+                type: 'object',
+                properties: {
+                  text: {
+                    type: 'string'
+                  },
+                  alignmentScore: {
+                    description: [
+                      'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
+                    ].join('\n'),
                     type: 'number'
                   }
                 },
@@ -507,75 +587,24 @@ process.stdin.on('data', async (chunk) => {
                         ...JSON.parse(params.item.text)
                       }
                     : params.item;
-                  appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
+                  const message = appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
                   await syncShoakuLists(initializeParams.initializationOptions.filePath);
                 }
               }
             );
-          });
 
-          goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
-          goalInputBuilder.onAgentInput(async (input) => {
-            if (input?.shoakuId && shoakuToSession.has(input.shoakuId)) {
-              const task = findActiveItem(input?.children ?? []);
-              if (task) {
-                startTurn({
-                  threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
-                  input: [
-                    {
-                      type: 'text',
-                      text: [
-                        '[Shoaku:IGNORE_ALL]',
-                        'Summarize the user\'s goal in bullet points.',
-                        `- Goal/Tasks: "${JSON.stringify(input)}"`,
-                        `- Previous summary: "${goalByShoakuId.get(input.shoakuId)}"`,
-                        'If nothing important changed, return an empty string.'
-                      ].join('\n')
-                    }
-                  ]}, {
-                    onItemCompleted: async (id, params) => {
-                      if (params.item.type !== 'agentMessage') {
-                        return;
-                      }
-
-                      if (params.item.text) {
-                        startTurn({
-                          threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
-                          input: [
-                            {
-                              type: 'text',
-                              text: [
-                                '[Shoaku:IGNORE_ALL]',
-                                `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
-                              ].join('\n')
-                            }
-                          ]}
-                        );
-                        goalByShoakuId.set(input.shoakuId, params.item.text);
-                      }
-                    }
-                  }
-                );
-              } else {
-                startTurn({
-                  threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
-                  input: [
-                    {
-                      type: 'text',
-                      text: [
-                        '[Shoaku:IGNORE]',
-                        `Regarding "${input.content}", Please think of a good task to do next.`
-                      ].join('\n')
-                    }
-                  ]}, {
-                    onItemCompleted: async (id, params) => {
-                      appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
-                      await syncShoakuLists(initializeParams.initializationOptions.filePath);
-                    }
-                  }
-                );
-              }
-            }
+            //startTurn({
+            //  threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
+            //  input: [
+            //    {
+            //      type: 'text',
+            //      text: [
+            //        '[Shoaku:IGNORE_ALL]',
+            //        `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+            //      ].join('\n')
+            //    }
+            //  ]}
+            //);
           });
 
           appServer.stdin.write(JSON.stringify(buildAppRequest('initialize', {
@@ -677,10 +706,11 @@ async function watchGoalsFileUpdates() {
       await syncShoakuLists(filePath);
 
       activeGoalItem = findActiveParentItem(lists);
-      if (goalInputBuilder) {
+      if (goalInputBuilder && activeGoalItem) {
+        const { messages, tokenUsage, status, ...content } = activeGoalItem;
         goalInputBuilder.ingest({
           type: inputType.GOAL,
-          content: activeGoalItem
+          content
         });
       }
 
@@ -805,13 +835,13 @@ function findActiveItem(lists) {
 
 function appendChatHistory(shoakuId, turnId, item) {
   if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE]')) {
-    return;
+    return null;
   }
   if (!item.text && !(item.content?.length > 0) && !item.command && !item.query) {
-    return;
+    return null;
   }
 
-  chatByShoakuId.get(shoakuId)?.messages.push({
+  const message = {
     turnId,
     type: item.type,
     phase: item.phase,
@@ -819,7 +849,10 @@ function appendChatHistory(shoakuId, turnId, item) {
       item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
     command: item.command || item.query,
     alignmentScore: item.alignmentScore
-  });
+  };
+  chatByShoakuId.get(shoakuId)?.messages.push(message);
+
+  return message;
 }
 
 const pendingTurns = new Map();

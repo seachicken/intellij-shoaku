@@ -32,5 +32,8 @@
                     anchor="right"/>
         <platform.lsp.serverSupportProvider implementation="shoaku.LanguageServerProvider"/>
     </extensions>
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="Shoaku" displayType="BALLOON" />
+    </extensions>
 
 </idea-plugin>
