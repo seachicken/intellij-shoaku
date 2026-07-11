@@ -47,6 +47,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.intellij.ide.BrowserUtil
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
@@ -555,7 +557,29 @@ private fun SessionTaskPane(
     val remainingCount = todoItems.count { it.checked == false }
     val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
     val messages = session.messages.orEmpty()
-    val taskResponse = remember(messages, session.status) { taskResponseDisplay(messages, session.status) }
+    val taskResponse = remember(messages) { taskResponseDisplay(messages) }
+    val comparableResponseText = remember(taskResponse) {
+        taskResponse?.takeUnless { it.isThinking || it.isFixedMessage }
+            ?.text
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+    }
+    var previousComparableResponseText by remember(session.shoakuId) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(session.shoakuId, comparableResponseText) {
+        val nextResponseText = comparableResponseText ?: return@LaunchedEffect
+        val previousResponseText = previousComparableResponseText
+        previousComparableResponseText = nextResponseText
+        if (previousResponseText == null || previousResponseText == nextResponseText) {
+            return@LaunchedEffect
+        }
+
+        project?.let {
+            Notification("Shoaku", nextResponseText, NotificationType.INFORMATION)
+                .notify(it)
+        }
+    }
+
     Column(
         modifier = modifier
             .background(TodoColors.sectionSurface, RoundedCornerShape(8.dp))
@@ -984,32 +1008,27 @@ private fun ChatHeader(
     )
 }
 
-private fun latestAgentMessage(messages: List<Message>): Message? =
-    messages.lastOrNull { it.type == "agentMessage" && it.phase == "final_answer" && !it.text.isNullOrBlank() }
-
-private fun taskResponseDisplay(messages: List<Message>, status: AgentStatusUi?): TaskResponseDisplay? {
-    val latestFinalMessage = latestAgentMessage(messages)
-    if (status?.toSummaryStatusState()?.isRunning == true) {
-        return TaskResponseDisplay(text = ThinkingMessage, isThinking = true)
-    }
-
-    val latestNonUserEntry = messages.lastOrNull { it.type != "userMessage" } ?: return null
-    if (latestNonUserEntry.turnId != null && latestNonUserEntry.turnId != latestFinalMessage?.turnId) {
-        val hasCurrentTurnActivity = messages.any { it.turnId == latestNonUserEntry.turnId && it.type != "userMessage" }
-        if (hasCurrentTurnActivity) {
-            return TaskResponseDisplay(text = ThinkingMessage, isThinking = true)
+private fun taskResponseDisplay(messages: List<Message>): TaskResponseDisplay? {
+    val latestFinalMessage = messages.lastOrNull { it.type == "agentMessage" }
+    return if (latestFinalMessage?.alignmentScore == null) {
+        null
+    } else {
+        if (latestFinalMessage.phase == "final_answer") {
+            if (latestFinalMessage.alignmentScore >= AlignmentGapMessageThreshold || latestFinalMessage.text.isNullOrBlank()) {
+                TaskResponseDisplay(
+                    text = AlignmentGapReassuringMessage,
+                    isFixedMessage = true
+                )
+            } else {
+                TaskResponseDisplay(
+                    text = latestFinalMessage.text,
+                    isFixedMessage = false
+                )
+            }
+        } else {
+            TaskResponseDisplay(text = ThinkingMessage, isThinking = true)
         }
     }
-
-    val finalText = reassuringAlignmentMessage(latestFinalMessage?.alignmentScore)
-        ?: latestFinalMessage?.text?.trim().orEmpty()
-    if (finalText.isBlank()) {
-        return null
-    }
-    return TaskResponseDisplay(
-        text = finalText,
-        isFixedMessage = finalText == AlignmentGapReassuringMessage
-    )
 }
 
 @Composable
@@ -2072,9 +2091,7 @@ private fun buildMarkdownAnnotatedString(text: String): AnnotatedString = buildA
                             fontWeight = FontWeight.Medium
                         )
                     ) {
-                        append(" ")
                         append(text.substring(cursor + 1, end))
-                        append(" ")
                     }
                     cursor = end + 1
                 } else {

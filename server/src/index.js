@@ -25,7 +25,6 @@ const sessionsDir = join(shoakuDir, 'sessions');
 const sessionToShoaku = new Map();
 const shoakuToSession = new Map();
 const chatByShoakuId = new Map();
-const goalByShoakuId = new Map();
 
 let config;
 let initializeParams;
@@ -154,7 +153,6 @@ async function startNewSession(goalItem) {
       explorerTokens: 0
     }
   });
-  goalByShoakuId.set(shoakuId, '');
 
   const [navigatorRes, explorerRes] = await Promise.all([
     sendAppRequest('thread/start', {
@@ -299,7 +297,6 @@ async function startNewSession(goalItem) {
 }
 
 async function resumeSession(shoakuId) {
-  goalByShoakuId.set(shoakuId, '');
   const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
   if (!metaData.navigator?.threadId || !metaData.explorer?.threadId) {
     logWarn(`Invalid session metadata for shoakuId ${shoakuId}`);
@@ -486,7 +483,6 @@ process.stdin.on('data', async (chunk) => {
           lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
           lspInputBuilder.onAgentInput(async (input) => {
             if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
-              logWarn(`No active goal item with shoakuId found, skipping didSave event processing. item: ${JSON.stringify(activeGoalItem)}`);
               return;
             }
 
@@ -555,118 +551,83 @@ process.stdin.on('data', async (chunk) => {
 
           goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
           goalInputBuilder.onAgentInput(async (input) => {
-            if (input?.shoakuId && shoakuToSession.has(input.shoakuId)) {
-              const task = findActiveItem(input?.children ?? []);
-              if (task) {
-                startTurn({
-                  threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
-                  input: [
-                    {
-                      type: 'text',
-                      text: [
-                        '[Shoaku:IGNORE_ALL]',
-                        'Summarize the user\'s goal in bullet points.',
-                        `- Goal/Tasks: "${JSON.stringify(input)}"`,
-                        `- Previous summary: "${goalByShoakuId.get(input.shoakuId)}"`,
-                        'If nothing important changed, return an empty string.'
-                      ].join('\n')
-                    }
-                  ]}, {
-                    onItemCompleted: async (id, params) => {
-                      if (params.item.type !== 'agentMessage') {
-                        return;
-                      }
-
-                      if (params.item.text) {
-                        // FIXME: Duplicate code
-                        startTurn({
-                          threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
-                          input: [
-                            {
-                              type: 'text',
-                              text: [
-                                '[Shoaku:IGNORE]',
-                                'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                                'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
-                              ].join('\n')
-                            }
-                          ],
-                          outputSchema: {
-                            type: 'object',
-                            properties: {
-                              text: {
-                                type: 'string'
-                              },
-                              alignmentScore: {
-                                description: [
-                                  'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
-                                ].join('\n'),
-                                type: 'number'
-                              }
-                            },
-                            required: [ 'text', 'alignmentScore' ],
-                            additionalProperties: false
-                          }
-                        }, {
-                            onItemCompleted: async (id, params) => {
-                              const response = typeof params.item.text === 'string'
-                                ? {
-                                    ...params.item,
-                                    ...JSON.parse(params.item.text)
-                                  }
-                                : params.item;
-                              const message = appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
-                              await syncShoakuLists(initializeParams.initializationOptions.filePath);
-
-                              if (message != null) {
-                                process.stdout.write(
-                                  buildNotification('shoaku/notify', {
-                                    text: message.text
-                                  })
-                                );
-                              }
-                            }
-                          }
-                        );
-
-                        //startTurn({
-                        //  threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
-                        //  input: [
-                        //    {
-                        //      type: 'text',
-                        //      text: [
-                        //        '[Shoaku:IGNORE_ALL]',
-                        //        `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
-                        //      ].join('\n')
-                        //    }
-                        //  ]}
-                        //);
-
-                        goalByShoakuId.set(input.shoakuId, params.item.text);
-                      }
-                    }
-                  }
-                );
-              } else {
-                startTurn({
-                  threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
-                  input: [
-                    {
-                      type: 'text',
-                      text: [
-                        '[Shoaku:IGNORE]',
-                        `Regarding "${input.content}", Please think of a good task to do next.`
-                      ].join('\n')
-                    }
-                  ]}, {
-                    onItemCompleted: async (id, params) => {
-                      appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
-                      await syncShoakuLists(initializeParams.initializationOptions.filePath);
-                    }
-                  }
-                );
-              }
+            if (!input?.shoakuId || !shoakuToSession.has(input.shoakuId)) {
+              return;
             }
+
+            await sendAppRequest('thread/inject_items', {
+              threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+              items: [
+                {
+                  type: 'message',
+                  role: 'assistant',
+                  content: [
+                    {
+                      type: 'output_text',
+                      text: [
+                        `Current Goal/Tasks: "${JSON.stringify(input)}"`
+                      ].join('\n')
+                    }
+                  ]
+                }
+              ]
+            });
+
+            // FIXME: Duplicate code
+            startTurn({
+              threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+              input: [
+                {
+                  type: 'text',
+                  text: [
+                    '[Shoaku:IGNORE]',
+                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
+                    'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
+                  ].join('\n')
+                }
+              ],
+              outputSchema: {
+                type: 'object',
+                properties: {
+                  text: {
+                    type: 'string'
+                  },
+                  alignmentScore: {
+                    description: [
+                      'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
+                    ].join('\n'),
+                    type: 'number'
+                  }
+                },
+                required: [ 'text', 'alignmentScore' ],
+                additionalProperties: false
+              }
+            }, {
+                onItemCompleted: async (id, params) => {
+                  const response = typeof params.item.text === 'string'
+                    ? {
+                        ...params.item,
+                        ...JSON.parse(params.item.text)
+                      }
+                    : params.item;
+                  const message = appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
+                  await syncShoakuLists(initializeParams.initializationOptions.filePath);
+                }
+              }
+            );
+
+            //startTurn({
+            //  threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
+            //  input: [
+            //    {
+            //      type: 'text',
+            //      text: [
+            //        '[Shoaku:IGNORE_ALL]',
+            //        `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
+            //      ].join('\n')
+            //    }
+            //  ]}
+            //);
           });
 
           appServer.stdin.write(JSON.stringify(buildAppRequest('initialize', {
@@ -768,10 +729,11 @@ async function watchGoalsFileUpdates() {
       await syncShoakuLists(filePath);
 
       activeGoalItem = findActiveParentItem(lists);
-      if (goalInputBuilder) {
+      if (goalInputBuilder && activeGoalItem) {
+        const { messages, tokenUsage, status, ...content } = activeGoalItem;
         goalInputBuilder.ingest({
           type: inputType.GOAL,
-          content: activeGoalItem
+          content
         });
       }
 

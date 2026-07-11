@@ -62,16 +62,6 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
             }
         }
 
-        @JsonNotification("shoaku/notify")
-        fun shoaku(params: NotifyParams) {
-            if (params.text.isNullOrBlank()) {
-                return
-            }
-
-            Notification("Shoaku", params.text, NotificationType.INFORMATION)
-                .notify(project)
-        }
-
         @JsonNotification("shoaku/showDiff")
         fun showDiff(params: ShowDiffParams) {
             project.service<ShoakuSettings>().viewModel.apply {
