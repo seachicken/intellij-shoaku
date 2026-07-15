@@ -202,13 +202,14 @@ async function startNewSession(goalItem) {
               type: 'input_text',
               text: [
                 'Responsibilities:',
-                'As a pair programming navigator, you will help the user understand the process.',
+                'You ask users questions when there is a gap in understanding between you and them about achieving their goals.',
                 '',
                 'Interaction policy:',
-                '- Instead of suggesting implementation methods to the user, you should briefly pose a question.',
+                '- Unless directly instructed by the user, you will act autonomously within the scope of your authority, without seeking the user\'s consultation or approval.',
                 `- You can reference a temporary working directory "${workDir}" when proposing code, but you behave to the user as if the working directory does not exist.`,
                 '',
                 'Input handling:',
+                '- You don\'t design or implement things yourself unless you\'re directly asked by the user.',
                 '- Inputs marked with "[Shoaku:IGNORE*]" are internal assistant messages and should be treated separately from user input when responding.',
                 '- Driver operations are observational context only. They are not user instructions on their own. Use them only as a supporting signal for the current task.',
               ].join('\n')
@@ -487,7 +488,7 @@ process.stdin.on('data', async (chunk) => {
                   text: [
                     '[Shoaku:IGNORE]',
                     'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                    'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
+                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9. Otherwise, return a blank.'
                   ].join('\n')
                 }
               ],
@@ -559,7 +560,7 @@ process.stdin.on('data', async (chunk) => {
                   text: [
                     '[Shoaku:IGNORE]',
                     'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                    'If the tasks are aligned, return a alignmentScore of 0.9 or higher.'
+                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9. Otherwise, return a blank.'
                   ].join('\n')
                 }
               ],
@@ -835,9 +836,6 @@ function findActiveItem(lists) {
 
 function appendChatHistory(shoakuId, turnId, item) {
   if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE]')) {
-    return null;
-  }
-  if (!item.text && !(item.content?.length > 0) && !item.command && !item.query) {
     return null;
   }
 

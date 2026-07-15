@@ -827,9 +827,14 @@ private fun ChatDock(
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
+    val visibleMessages = remember(messages) {
+        messages.filter { message ->
+            message.command?.isNotBlank() == true || message.text?.isNotBlank() == true
+        }
+    }
 
-    LaunchedEffect(messages.size) {
-        val lastIndex = messages.lastIndex
+    LaunchedEffect(visibleMessages.size) {
+        val lastIndex = visibleMessages.lastIndex
         if (lastIndex >= 0) {
             listState.animateScrollToItem(lastIndex)
         }
@@ -841,7 +846,7 @@ private fun ChatDock(
             .padding(top = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (messages.isEmpty()) {
+        if (visibleMessages.isEmpty()) {
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -861,8 +866,8 @@ private fun ChatDock(
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 4.dp)
             ) {
-                itemsIndexed(messages) { index, entry ->
-                    val previousEntry = messages.getOrNull(index - 1)
+                itemsIndexed(visibleMessages) { index, entry ->
+                    val previousEntry = visibleMessages.getOrNull(index - 1)
                     val startsNewTurn =
                         entry.turnId != null &&
                         entry.type != "userMessage" &&
@@ -1009,25 +1014,25 @@ private fun ChatHeader(
 }
 
 private fun taskResponseDisplay(messages: List<Message>): TaskResponseDisplay? {
-    val latestFinalMessage = messages.lastOrNull { it.type == "agentMessage" }
-    return if (latestFinalMessage?.alignmentScore == null) {
-        null
-    } else {
-        if (latestFinalMessage.phase == "final_answer") {
-            if (latestFinalMessage.alignmentScore >= AlignmentGapMessageThreshold || latestFinalMessage.text.isNullOrBlank()) {
-                TaskResponseDisplay(
-                    text = AlignmentGapReassuringMessage,
-                    isFixedMessage = true
-                )
-            } else {
-                TaskResponseDisplay(
-                    text = latestFinalMessage.text,
-                    isFixedMessage = false
-                )
-            }
+    val latestScoredAgentMessage = messages.lastOrNull {
+        it.type == "agentMessage" && it.alignmentScore != null
+    } ?: return null
+    val alignmentScore = requireNotNull(latestScoredAgentMessage.alignmentScore)
+
+    return if (latestScoredAgentMessage.phase == "final_answer") {
+        if (alignmentScore >= AlignmentGapMessageThreshold || latestScoredAgentMessage.text.isNullOrBlank()) {
+            TaskResponseDisplay(
+                text = AlignmentGapReassuringMessage,
+                isFixedMessage = true
+            )
         } else {
-            TaskResponseDisplay(text = ThinkingMessage, isThinking = true)
+            TaskResponseDisplay(
+                text = latestScoredAgentMessage.text,
+                isFixedMessage = false
+            )
         }
+    } else {
+        TaskResponseDisplay(text = ThinkingMessage, isThinking = true)
     }
 }
 
