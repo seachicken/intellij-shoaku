@@ -151,7 +151,8 @@ async function startNewSession(goalItem) {
       maxTokens: config?.defaultTokenBudget || 0,
       navigatorTokens: 0,
       explorerTokens: 0
-    }
+    },
+    temporaryWorkspace: workDir
   });
 
   const [navigatorRes, explorerRes] = await Promise.all([
@@ -333,8 +334,15 @@ async function resumeSession(shoakuId) {
     navigatorThreadId: metaData.navigator.threadId,
     explorerThreadId: metaData.explorer.threadId
   });
-
   const chat = chatByShoakuId.get(sessionToShoaku.get(navigatorThreadId));
+
+  const explorerReadRes = await sendAppRequest('thread/read', {
+    threadId: explorerThreadId,
+    includeTurns: false
+  });
+  chat.temporaryWorkspace = explorerReadRes.result.thread.cwd;
+  logWarn(`resume chat: ${JSON.stringify(chat)}`);
+
   if (!chat?.messages || chat.messages.length === 0) {
     sendAppRequest('thread/read', {
       threadId: navigatorThreadId,
@@ -379,6 +387,8 @@ async function syncShoakuLists(filePath) {
       goal.messages = chatByShoakuId.get(goal.shoakuId)?.messages;
       goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage;
       goal.status = chatByShoakuId.get(goal.shoakuId)?.status;
+      goal.temporaryWorkspace = chatByShoakuId.get(goal.shoakuId)?.temporaryWorkspace;
+      logWarn(`return tempwork: ${goal.temporaryWorkspace}`);
     }
   }
   process.stdout.write(
@@ -502,7 +512,7 @@ process.stdin.on('data', async (chunk) => {
                     description: [
                       'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
                     ].join('\n'),
-                    type: 'number'
+                    type: 'integer'
                   }
                 },
                 required: [ 'text', 'alignmentScore' ],
@@ -574,7 +584,7 @@ process.stdin.on('data', async (chunk) => {
                     description: [
                       'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
                     ].join('\n'),
-                    type: 'number'
+                    type: 'integer'
                   }
                 },
                 required: [ 'text', 'alignmentScore' ],
@@ -582,7 +592,7 @@ process.stdin.on('data', async (chunk) => {
               }
             }, {
                 onItemCompleted: async (id, params) => {
-                  const response = typeof params.item.text === 'string'
+                  const response = params.item.type === 'agentMessage'
                     ? {
                         ...params.item,
                         ...JSON.parse(params.item.text)
@@ -590,22 +600,24 @@ process.stdin.on('data', async (chunk) => {
                     : params.item;
                   const message = appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
                   await syncShoakuLists(initializeParams.initializationOptions.filePath);
+
+                  if (response.alignmentScore > 0.9) {
+                    startTurn({
+                      threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
+                      input: [
+                        {
+                          type: 'text',
+                          text: [
+                            '[Shoaku:IGNORE_ALL]',
+                            `Implement it autonomously to achieve the user's goal. User's goal: ${input.content}`
+                          ].join('\n')
+                        }
+                      ]}
+                    );
+                  }
                 }
               }
             );
-
-            //startTurn({
-            //  threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
-            //  input: [
-            //    {
-            //      type: 'text',
-            //      text: [
-            //        '[Shoaku:IGNORE_ALL]',
-            //        `Implement it autonomously to achieve the user's goal. User's goal: ${params.item.text}`
-            //      ].join('\n')
-            //    }
-            //  ]}
-            //);
           });
 
           appServer.stdin.write(JSON.stringify(buildAppRequest('initialize', {
@@ -682,6 +694,62 @@ process.stdin.on('data', async (chunk) => {
           );
           break;
 
+        case 'shoaku/startFinalCheck':
+          await startTurn({
+            threadId: shoakuToSession.get(message.params.shoakuId).navigatorThreadId,
+            input: [
+              {
+                type: 'text',
+                text: [
+                  '[Shoaku:IGNORE]',
+                  'Compare the temporary working directory and the current working directory, and summarize any overlooked issues in a report. Ignore minor differences in code style.'
+                ].join('\n')
+              }
+            ],
+            outputSchema: {
+              type: 'object',
+              properties: {
+                text: {
+                  description: 'Summary of results.',
+                  type: 'string'
+                },
+                inlineReviewComments: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      path: {
+                        type: 'string'
+                      },
+                      line: {
+                        type: 'integer'
+                      },
+                      text: {
+                        type: 'string'
+                      }
+                    },
+                    required: [ 'path', 'line', 'text' ],
+                    additionalProperties: false
+                  }
+                }
+              },
+              required: [ 'text', 'inlineReviewComments' ],
+              additionalProperties: false
+            }
+          }, {
+              onItemCompleted: async (id, params) => {
+                const response = params.item.type === 'agentMessage'
+                  ? {
+                      ...params.item,
+                      ...JSON.parse(params.item.text)
+                    }
+                  : params.item;
+                appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
+                await syncShoakuLists(initializeParams.initializationOptions.filePath);
+              }
+            }
+          );
+          break;
       }
     }
   } catch (err) {
@@ -846,7 +914,8 @@ function appendChatHistory(shoakuId, turnId, item) {
     text: item.text ||
       item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
     command: item.command || item.query,
-    alignmentScore: item.alignmentScore
+    alignmentScore: item.alignmentScore,
+    inlineReviewComments: item.inlineReviewComments
   };
   chatByShoakuId.get(shoakuId)?.messages.push(message);
 

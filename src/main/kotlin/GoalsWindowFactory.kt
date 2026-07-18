@@ -1,12 +1,7 @@
 package shoaku
 
 import androidx.compose.animation.*
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -144,6 +139,8 @@ private fun MyToolWindowContent(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        val scope = rememberCoroutineScope()
+
         SessionHeaderSwitcher(
             openSessions = openSessions,
             selectedSessionKey = selectedSessionKey,
@@ -555,9 +552,18 @@ private fun SessionTaskPane(
 ) {
     val todoItems = session.children.filter { it.checked != null }
     val remainingCount = todoItems.count { it.checked == false }
+    val isChecklistComplete = todoItems.isNotEmpty() && remainingCount == 0
     val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
     val messages = session.messages.orEmpty()
     val taskResponse = remember(messages) { taskResponseDisplay(messages) }
+    val finalCheckMessage = remember(messages) { finalCheckResponse(messages) }
+    var finalCheckThinking by remember(session.shoakuId) { mutableStateOf(false) }
+
+    LaunchedEffect(messages.size, finalCheckMessage) {
+        if (finalCheckMessage != null) {
+            finalCheckThinking = false
+        }
+    }
     val comparableResponseText = remember(taskResponse) {
         taskResponse?.takeUnless { it.isThinking || it.isFixedMessage }
             ?.text
@@ -618,7 +624,29 @@ private fun SessionTaskPane(
                 TaskListCard(
                     todoItems = todoItems,
                     activeItemIndex = activeItemIndex,
-                    response = taskResponse
+                    response = taskResponse,
+                    reviewEnabled = isChecklistComplete,
+                    selectedReviewLocation = viewModel.selectedReviewLocation,
+                    reviewResponse = if (finalCheckThinking) {
+                        Message(
+                            type = "agentMessage",
+                            phase = "final_check",
+                            text = ThinkingMessage
+                        )
+                    } else {
+                        finalCheckMessage
+                    },
+                    onReviewLinkClick = { link, comments ->
+                        project?.let {
+                            openReviewDiff(it, session.temporaryWorkspace, link, comments)
+                        }
+                    },
+                    onReviewClick = {
+                        finalCheckThinking = true
+                        project?.sendNotificationToShoakuServer { server ->
+                            server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
+                        }
+                    }
                 )
             }
             if (diffResponse?.response?.isNotBlank() == true) {
@@ -627,7 +655,7 @@ private fun SessionTaskPane(
                         title = "Suggested summary",
                         modifier = Modifier.fillMaxWidth(),
                         action = {
-                                    OutlinedButton(
+                            OutlinedButton(
                                 onClick = {
                                     project?.let {
                                         project.sendNotificationToShoakuServer { server ->
@@ -657,6 +685,7 @@ private fun SessionTaskPane(
 private const val AlignmentGapMessageThreshold = 0.9
 private const val AlignmentGapReassuringMessage = "Aligned with goal"
 private const val ThinkingMessage = "Thinking"
+private const val ReviewTaskTitle = "Final Check"
 
 private data class TaskResponseDisplay(
     val text: String,
@@ -676,6 +705,11 @@ private fun TaskListCard(
     todoItems: List<Item>,
     activeItemIndex: Int,
     response: TaskResponseDisplay?,
+    reviewEnabled: Boolean,
+    selectedReviewLocation: ReviewLocation?,
+    reviewResponse: Message?,
+    onReviewLinkClick: (String, List<ReviewComment>) -> Unit,
+    onReviewClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -690,33 +724,56 @@ private fun TaskListCard(
                 color = TodoColors.secondaryText,
                 fontSize = 12.sp
             )
-        } else {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                todoItems.forEachIndexed { index, model ->
-                    when {
-                        index == activeItemIndex -> CurrentTaskGroup(
-                            title = model.content,
-                            response = response,
-                        )
-                        model.checked == true -> TodoRow(
-                            title = model.content,
-                            subtitle = null,
-                            meta = null,
-                            completed = true,
-                            compact = true,
-                            emphasis = TodoRowEmphasis.MutedPending
-                        )
-                        else -> TodoRow(
-                            title = model.content,
-                            subtitle = null,
-                            meta = null,
-                            completed = false,
-                            compact = true,
-                            emphasis = TodoRowEmphasis.MutedPending
-                        )
-                    }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            todoItems.forEachIndexed { index, model ->
+                when {
+                    index == activeItemIndex -> CurrentTaskGroup(
+                        title = model.content,
+                        response = response
+                    )
+                    model.checked == true -> TodoRow(
+                        title = model.content,
+                        subtitle = null,
+                        meta = null,
+                        completed = true,
+                        compact = true,
+                        emphasis = TodoRowEmphasis.MutedPending
+                    )
+                    else -> TodoRow(
+                        title = model.content,
+                        subtitle = null,
+                        meta = null,
+                        completed = false,
+                        compact = true,
+                        emphasis = TodoRowEmphasis.MutedPending
+                    )
                 }
             }
+            CurrentTaskGroup(
+                title = ReviewTaskTitle,
+                response = reviewResponse?.let {
+                    TaskResponseDisplay(
+                        text = it.text.orEmpty(),
+                        isThinking = it.text == ThinkingMessage
+                    )
+                },
+                onReviewLinkClick = { link ->
+                    onReviewLinkClick(link, reviewResponse?.inlineReviewComments.orEmpty())
+                },
+                reviewComments = reviewResponse?.inlineReviewComments.orEmpty(),
+                selectedReviewLocation = selectedReviewLocation,
+                onReviewCommentClick = { comment ->
+                    onReviewLinkClick(
+                        "shoaku-review://${comment.path}#L${comment.line}",
+                        reviewResponse?.inlineReviewComments.orEmpty()
+                    )
+                },
+                enabled = reviewEnabled,
+                buttonStyle = true,
+                onClick = if (reviewEnabled) onReviewClick else null,
+                disabledReason = "Complete all tasks before running the final check."
+            )
         }
     }
 }
@@ -725,6 +782,14 @@ private fun TaskListCard(
 private fun CurrentTaskGroup(
     title: String,
     response: TaskResponseDisplay?,
+    onReviewLinkClick: ((String) -> Unit)? = null,
+    reviewComments: List<ReviewComment> = emptyList(),
+    selectedReviewLocation: ReviewLocation? = null,
+    onReviewCommentClick: ((ReviewComment) -> Unit)? = null,
+    onClick: (() -> Unit)? = null,
+    enabled: Boolean = true,
+    buttonStyle: Boolean = false,
+    disabledReason: String? = null,
     modifier: Modifier = Modifier
 ) {
     val hasMessage = response != null
@@ -750,10 +815,19 @@ private fun CurrentTaskGroup(
                 meta = null,
                 completed = false,
                 compact = true,
-                emphasis = TodoRowEmphasis.Current
+                emphasis = TodoRowEmphasis.Current,
+                enabled = enabled,
+                buttonStyle = buttonStyle,
+                hoverable = onClick != null || buttonStyle,
+                onClick = onClick,
+                disabledReason = disabledReason
             )
             AttachedResponseCard(
                 response = response,
+                onReviewLinkClick = onReviewLinkClick,
+                reviewComments = reviewComments,
+                selectedReviewLocation = selectedReviewLocation,
+                onReviewCommentClick = onReviewCommentClick,
                 modifier = Modifier.padding(start = 18.dp)
             )
             if (hasMessage) {
@@ -766,6 +840,10 @@ private fun CurrentTaskGroup(
 @Composable
 private fun AttachedResponseCard(
     response: TaskResponseDisplay?,
+    onReviewLinkClick: ((String) -> Unit)? = null,
+    reviewComments: List<ReviewComment> = emptyList(),
+    selectedReviewLocation: ReviewLocation? = null,
+    onReviewCommentClick: ((ReviewComment) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val displayText = response?.text?.trim().orEmpty()
@@ -793,24 +871,105 @@ private fun AttachedResponseCard(
                     .border(1.dp, TodoColors.attachedResponseBorder, RoundedCornerShape(14.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
-                AgentMessageContent(
-                    message = displayText,
-                    style = if (response?.isThinking == true || response?.isFixedMessage == true) {
-                        TextStyle(
-                            color = TodoColors.secondaryText,
-                            fontSize = 13.sp,
-                            lineHeight = 20.sp
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AgentMessageContent(
+                        message = displayText,
+                        onLinkClick = onReviewLinkClick,
+                        style = if (response?.isThinking == true || response?.isFixedMessage == true) {
+                            TextStyle(
+                                color = TodoColors.secondaryText,
+                                fontSize = 13.sp,
+                                lineHeight = 20.sp
+                            )
+                        } else {
+                            TextStyle(
+                                color = TodoColors.infoText,
+                                fontSize = 13.sp,
+                                lineHeight = 20.sp
+                            )
+                        }
+                    )
+                    if (reviewComments.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(TodoColors.reviewCommentDivider)
                         )
-                    } else {
-                        TextStyle(
-                            color = TodoColors.infoText,
-                            fontSize = 13.sp,
-                            lineHeight = 20.sp
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            reviewComments.forEach { comment ->
+                                ReviewCommentRow(
+                                    comment = comment,
+                                    selected = selectedReviewLocation == ReviewLocation(comment.path, comment.line),
+                                    onClick = onReviewCommentClick
+                                )
+                            }
+                        }
                     }
-                )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ReviewCommentRow(
+    comment: ReviewComment,
+    selected: Boolean,
+    onClick: ((ReviewComment) -> Unit)?
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                when {
+                    selected -> TodoColors.reviewCommentSelectedSurface
+                    hovered -> TodoColors.reviewCommentHoverSurface
+                    else -> Color.Transparent
+                }
+            )
+            .border(
+                width = if (selected) 1.dp else 0.dp,
+                color = if (selected) TodoColors.reviewCommentSelectedBorder else Color.Transparent,
+                shape = RoundedCornerShape(6.dp)
+            )
+            .hoverable(interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = onClick != null
+            ) { onClick?.invoke(comment) }
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${comment.path}:${comment.line}",
+                color = TodoColors.linkText,
+                fontSize = 11.sp,
+                textDecoration = TextDecoration.Underline
+            )
+            Text(
+                text = "Open diff ↗",
+                color = TodoColors.linkText,
+                fontSize = 11.sp
+            )
+        }
+        Text(
+            text = comment.text,
+            color = TodoColors.infoText,
+            fontSize = 12.sp,
+            lineHeight = 17.sp
+        )
     }
 }
 
@@ -1035,6 +1194,14 @@ private fun taskResponseDisplay(messages: List<Message>): TaskResponseDisplay? {
         TaskResponseDisplay(text = ThinkingMessage, isThinking = true)
     }
 }
+
+private fun finalCheckResponse(messages: List<Message>): Message? =
+    messages.lastOrNull {
+        it.type == "agentMessage" &&
+            it.phase == "final_answer" &&
+            it.alignmentScore == null &&
+            !it.text.isNullOrBlank()
+    }
 
 @Composable
 private fun TokenUsageIndicator(
@@ -1820,6 +1987,7 @@ private fun ChatTurnDivider() {
 @Composable
 private fun AgentMessageContent(
     message: String,
+    onLinkClick: ((String) -> Unit)? = null,
     style: TextStyle = TextStyle(
         color = TodoColors.infoText,
         fontSize = 13.sp,
@@ -1830,7 +1998,7 @@ private fun AgentMessageContent(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is AgentMessageBlock.Paragraph -> MarkdownTextBlock(text = block.text, style = style)
+                is AgentMessageBlock.Paragraph -> MarkdownTextBlock(text = block.text, style = style, onLinkClick = onLinkClick)
                 is AgentMessageBlock.Heading -> MarkdownTextBlock(
                     text = block.text,
                     style = TextStyle(
@@ -1841,10 +2009,10 @@ private fun AgentMessageContent(
                     )
                 )
                 is AgentMessageBlock.UnorderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEach { MarkdownListItem(marker = "•", text = it) }
+                    block.items.forEach { MarkdownListItem(marker = "•", text = it, onLinkClick = onLinkClick) }
                 }
                 is AgentMessageBlock.OrderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEach { (number, item) -> MarkdownListItem(marker = "$number.", text = item) }
+                    block.items.forEach { (number, item) -> MarkdownListItem(marker = "$number.", text = item, onLinkClick = onLinkClick) }
                 }
                 is AgentMessageBlock.Quote -> Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1896,6 +2064,7 @@ private const val MarkdownLinkTag = "markdown-link"
 private fun MarkdownTextBlock(
     text: String,
     modifier: Modifier = Modifier,
+    onLinkClick: ((String) -> Unit)? = null,
     style: TextStyle = TextStyle(
         color = TodoColors.infoText,
         fontSize = 13.sp,
@@ -1911,7 +2080,9 @@ private fun MarkdownTextBlock(
             annotatedText
                 .getStringAnnotations(MarkdownLinkTag, offset, offset)
                 .firstOrNull()
-                ?.let { BrowserUtil.browse(it.item) }
+                ?.let { annotation ->
+                    onLinkClick?.invoke(annotation.item) ?: BrowserUtil.browse(annotation.item)
+                }
         }
     )
 }
@@ -1919,7 +2090,8 @@ private fun MarkdownTextBlock(
 @Composable
 private fun MarkdownListItem(
     marker: String,
-    text: String
+    text: String,
+    onLinkClick: ((String) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1934,6 +2106,7 @@ private fun MarkdownListItem(
         )
         MarkdownTextBlock(
             text = text,
+            onLinkClick = onLinkClick,
             modifier = Modifier.weight(1f)
         )
     }
@@ -2273,6 +2446,9 @@ private fun TodoRow(
     modifier: Modifier = Modifier,
     compact: Boolean = false,
     emphasis: TodoRowEmphasis = TodoRowEmphasis.Default,
+    enabled: Boolean = true,
+    buttonStyle: Boolean = false,
+    disabledReason: String? = null,
     hoverable: Boolean = false,
     onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null
@@ -2281,17 +2457,19 @@ private fun TodoRow(
     val isHovered by interactionSource.collectIsHoveredAsState()
     val effectiveEmphasis = emphasis
     val colors = when {
-        hoverable && isHovered -> TodoColors.hoveredCard(effectiveEmphasis)
+        buttonStyle && enabled && isHovered -> TodoColors.reviewButtonHovered
+        buttonStyle -> TodoColors.reviewButton
+        enabled && hoverable && isHovered -> TodoColors.hoveredCard(effectiveEmphasis)
         else -> TodoColors.card(effectiveEmphasis)
     }
     val shape = RoundedCornerShape(TodoMetrics.cardCornerRadius)
     val cardModifier = modifier
         .fillMaxWidth()
-        .border(width = 1.dp, color = colors.border, shape = shape)
+        .border(width = if (buttonStyle) 2.dp else 1.dp, color = colors.border, shape = shape)
         .background(color = colors.background, shape = shape)
         .then(if (hoverable) Modifier.hoverable(interactionSource) else Modifier)
         .then(
-            if (onClick != null) {
+            if (onClick != null && enabled) {
                 Modifier.clickable(interactionSource = interactionSource, indication = null) { onClick() }
             } else {
                 Modifier
@@ -2302,39 +2480,62 @@ private fun TodoRow(
             vertical = if (compact) TodoMetrics.compactVerticalPadding else TodoMetrics.verticalPadding
         )
 
-    Row(
-        modifier = cardModifier,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(if (subtitle != null) 4.dp else 0.dp)
+    Box {
+        Row(
+            modifier = cardModifier,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = title,
-                fontSize = if (compact) 14.sp else 15.sp,
-                fontWeight = if (compact) FontWeight.Medium else FontWeight.SemiBold,
-                color = TodoColors.todoTitleText(emphasis = effectiveEmphasis, completed = completed),
-                textDecoration = if (completed) TextDecoration.LineThrough else TextDecoration.None
-            )
-            subtitle?.let {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(if (subtitle != null) 4.dp else 0.dp)
+            ) {
                 Text(
-                    text = it,
-                    fontSize = 12.sp,
-                    color = TodoColors.secondaryText
+                    text = title,
+                    fontSize = if (compact) 14.sp else 15.sp,
+                    fontWeight = if (compact) FontWeight.Medium else FontWeight.SemiBold,
+                    color = TodoColors.todoTitleText(emphasis = effectiveEmphasis, completed = completed, enabled = enabled),
+                    textDecoration = if (completed) TextDecoration.LineThrough else TextDecoration.None
                 )
+                subtitle?.let {
+                    Text(
+                        text = it,
+                        fontSize = 12.sp,
+                        color = if (enabled) TodoColors.secondaryText else TodoColors.disabledText
+                    )
+                }
+            }
+            if (trailing != null) {
+                trailing()
+            } else {
+                meta?.let {
+                    Text(
+                        text = it,
+                        fontSize = 12.sp,
+                        color = if (enabled) TodoColors.secondaryText else TodoColors.disabledText
+                    )
+                }
             }
         }
-        if (trailing != null) {
-            trailing()
-        } else {
-            meta?.let {
-                Text(
-                    text = it,
-                    fontSize = 12.sp,
-                    color = TodoColors.secondaryText
-                )
+        if (!enabled && !disabledReason.isNullOrBlank() && isHovered) {
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = androidx.compose.ui.unit.IntOffset(8, -36),
+                properties = PopupProperties(focusable = false)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(TodoColors.popupSurface)
+                        .border(1.dp, TodoColors.popupBorder, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = disabledReason,
+                        fontSize = 12.sp,
+                        color = TodoColors.primaryText
+                    )
+                }
             }
         }
     }
@@ -2455,6 +2656,7 @@ private object TodoColors {
     private val infoBackground = namedColor("Component.infoBackground", 0xFF24324A, 0xFFF3F7FF)
     val primaryText = namedColor("Label.foreground", 0xFFE6EDF3, 0xFF1F2328)
     val secondaryText = namedColor("Label.infoForeground", 0xFF9DA7B3, 0xFF667281)
+    val disabledText = namedColor("Label.disabledForeground", 0xFF7A828E, 0xFFA0A8B5)
     val linkText = namedColor("Link.activeForeground", 0xFF6CB6FF, 0xFF0B57D0)
     val popupSecondaryText = blend(primaryText, secondaryText, 0.55f)
     val completedText = secondaryText.copy(alpha = 0.9f)
@@ -2502,6 +2704,19 @@ private object TodoColors {
     val inlineCodeText = namedColor("Label.foreground", 0xFFF3F4F6, 0xFF20252B)
     private val mutedPendingSurface = overlay(infoBackground.copy(alpha = 0.04f), blend(panelBackground, listBackground, 0.76f))
     private val mutedPendingBorder = componentBorder.copy(alpha = 0.58f)
+
+    val reviewButton = TodoCardColors(
+        background = overlay(brandAccentPrimary.copy(alpha = 0.16f), blend(listBackground, panelBackground, 0.42f)),
+        border = brandAccentPrimary.copy(alpha = 0.72f)
+    )
+    val reviewButtonHovered = TodoCardColors(
+        background = overlay(hoverBackground.copy(alpha = 0.34f), overlay(brandAccentPrimary.copy(alpha = 0.22f), blend(listBackground, panelBackground, 0.34f))),
+        border = brandAccentSecondary.copy(alpha = 0.95f)
+    )
+    val reviewCommentHoverSurface = overlay(hoverBackground.copy(alpha = 0.22f), blend(listBackground, panelBackground, 0.44f))
+    val reviewCommentSelectedSurface = overlay(brandAccentPrimary.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.4f))
+    val reviewCommentSelectedBorder = brandAccentPrimary.copy(alpha = 0.72f)
+    val reviewCommentDivider = componentBorder.copy(alpha = 0.54f)
 
     fun tokenUsageIndicator(usageFraction: Float): Color {
         val clampedFraction = usageFraction.coerceIn(0f, 1f)
@@ -2573,8 +2788,9 @@ private object TodoColors {
         )
     }
 
-    fun todoTitleText(emphasis: TodoRowEmphasis, completed: Boolean): Color =
+    fun todoTitleText(emphasis: TodoRowEmphasis, completed: Boolean, enabled: Boolean = true): Color =
         when {
+            !enabled -> disabledText
             completed -> completedText
             emphasis == TodoRowEmphasis.MutedPending -> mutedPendingText
             else -> primaryText
@@ -2701,13 +2917,13 @@ fun MyToolWindowSessionListPreview() {
 @Preview
 fun MyToolWindowSessionTabsPreview() {
     val viewModel = sampleShoakuViewModel()
-    val openSessions = viewModel.items.take(2).map { it.sessionKey }
+    val openSessions = listOf(viewModel.items.first().sessionKey, viewModel.items[2].sessionKey)
 
     MyToolWindowContent(
         viewModel,
         ShoakuSettings.State(filePath = "/tmp/shoaku-todo.md"),
         initialOpenSessionKeys = openSessions,
-        initialSelectedSessionKey = openSessions.firstOrNull()
+        initialSelectedSessionKey = openSessions.lastOrNull()
     )
 }
 
@@ -2755,6 +2971,34 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
                 Item("text", "bbb-2", checked = null)
             ),
             shoakuId = "shoaku-preview-2"
+        ),
+        Item(
+            "text",
+            "ccc",
+            checked = true,
+            children = listOf(
+                Item("text", "ccc-1", checked = true),
+                Item("text", "ccc-2", checked = true),
+                Item("text", "ccc-3", checked = true)
+            ),
+            messages = listOf(
+                Message(
+                    type = "agentMessage",
+                    phase = "final_answer",
+                    text = "All implementation tasks are complete.",
+                    alignmentScore = 0.95
+                )
+            ),
+            tokenUsage = TokenUsageUi(
+                maxTokens = 32_000,
+                navigatorTokens = 10_400,
+                explorerTokens = 14_200
+            ),
+            status = AgentStatusUi(
+                navigator = "",
+                explorer = ""
+            ),
+            shoakuId = "shoaku-preview-3"
         )
     )
     diffResponses["shoaku-preview-1"] = ShowDiffParams(

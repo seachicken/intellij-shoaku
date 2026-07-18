@@ -20,6 +20,7 @@
     <!-- Product and plugin compatibility requirements.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.vcs</depends>
     <depends>com.intellij.modules.compose</depends>
     <depends>com.intellij.modules.lsp</depends>
 
@@ -31,6 +32,7 @@
                     icon="icons/logo/logo.svg"
                     anchor="right"/>
         <platform.lsp.serverSupportProvider implementation="shoaku.LanguageServerProvider"/>
+        <diff.DiffExtension implementation="shoaku.ReviewDiffExtension"/>
     </extensions>
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup id="Shoaku" displayType="BALLOON" />

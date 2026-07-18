@@ -13,6 +13,7 @@ import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import java.nio.file.Files
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
+import java.nio.file.Path
 
 class LanguageServerProvider : LspServerSupportProvider {
     override fun fileOpened(
@@ -85,7 +86,8 @@ data class Item(
     val shoakuId: String? = null,
     val messages: List<Message>? = emptyList(),
     val tokenUsage: TokenUsageUi? = null,
-    val status: AgentStatusUi? = null
+    val status: AgentStatusUi? = null,
+    val temporaryWorkspace: String? = null
 )
 
 data class Message(
@@ -94,7 +96,14 @@ data class Message(
     val phase: String? = null,
     val text: String? = null,
     val command: String? = null,
-    val alignmentScore: Double? = null
+    val alignmentScore: Double? = null,
+    val inlineReviewComments: List<ReviewComment>? = emptyList()
+)
+
+data class ReviewComment(
+    val path: String,
+    val line: Int,
+    val text: String
 )
 
 data class TokenUsageUi(
@@ -106,10 +115,6 @@ data class TokenUsageUi(
 data class AgentStatusUi(
     val navigator: String? = null,
     val explorer: String? = null
-)
-
-data class NotifyParams(
-    val text: String? = null
 )
 
 data class ShowDiffParams(
