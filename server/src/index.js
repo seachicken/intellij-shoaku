@@ -341,7 +341,6 @@ async function resumeSession(shoakuId) {
     includeTurns: false
   });
   chat.temporaryWorkspace = explorerReadRes.result.thread.cwd;
-  logWarn(`resume chat: ${JSON.stringify(chat)}`);
 
   if (!chat?.messages || chat.messages.length === 0) {
     sendAppRequest('thread/read', {
@@ -388,7 +387,6 @@ async function syncShoakuLists(filePath) {
       goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage;
       goal.status = chatByShoakuId.get(goal.shoakuId)?.status;
       goal.temporaryWorkspace = chatByShoakuId.get(goal.shoakuId)?.temporaryWorkspace;
-      logWarn(`return tempwork: ${goal.temporaryWorkspace}`);
     }
   }
   process.stdout.write(
