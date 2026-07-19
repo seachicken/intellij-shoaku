@@ -720,9 +720,10 @@ private fun TaskListCard(
     ) {
         if (todoItems.isEmpty()) {
             Text(
-                text = "No checklist items yet.",
+                text = "No tasks yet.",
                 color = TodoColors.secondaryText,
-                fontSize = 12.sp
+                fontSize = 12.sp,
+                modifier = Modifier.padding(vertical = 12.dp)
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -772,7 +773,6 @@ private fun TaskListCard(
                 enabled = reviewEnabled,
                 buttonStyle = true,
                 onClick = if (reviewEnabled) onReviewClick else null,
-                disabledReason = "Complete all tasks before running the final check."
             )
         }
     }
@@ -789,7 +789,6 @@ private fun CurrentTaskGroup(
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true,
     buttonStyle: Boolean = false,
-    disabledReason: String? = null,
     modifier: Modifier = Modifier
 ) {
     val hasMessage = response != null
@@ -818,9 +817,8 @@ private fun CurrentTaskGroup(
                 emphasis = TodoRowEmphasis.Current,
                 enabled = enabled,
                 buttonStyle = buttonStyle,
-                hoverable = onClick != null || buttonStyle,
-                onClick = onClick,
-                disabledReason = disabledReason
+                hoverable = enabled && (onClick != null || buttonStyle),
+                onClick = onClick
             )
             AttachedResponseCard(
                 response = response,
@@ -2448,7 +2446,6 @@ private fun TodoRow(
     emphasis: TodoRowEmphasis = TodoRowEmphasis.Default,
     enabled: Boolean = true,
     buttonStyle: Boolean = false,
-    disabledReason: String? = null,
     hoverable: Boolean = false,
     onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null
@@ -2513,27 +2510,6 @@ private fun TodoRow(
                         text = it,
                         fontSize = 12.sp,
                         color = if (enabled) TodoColors.secondaryText else TodoColors.disabledText
-                    )
-                }
-            }
-        }
-        if (!enabled && !disabledReason.isNullOrBlank() && isHovered) {
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = androidx.compose.ui.unit.IntOffset(8, -36),
-                properties = PopupProperties(focusable = false)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(TodoColors.popupSurface)
-                        .border(1.dp, TodoColors.popupBorder, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = disabledReason,
-                        fontSize = 12.sp,
-                        color = TodoColors.primaryText
                     )
                 }
             }
