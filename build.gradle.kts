@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.2.0"
+version = "0.2.1-beta.1"
 
 // Set the JVM language level used to build the project.
 kotlin {
