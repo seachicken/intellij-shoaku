@@ -27,12 +27,12 @@
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
-        <projectService serviceImplementation="shoaku.ShoakuSettings" />
-        <toolWindow id="Shoaku" factoryClass="shoaku.GoalsWindowFactory"
+        <projectService serviceImplementation="shoaku.shoaku.ShoakuSettings" />
+        <toolWindow id="Shoaku" factoryClass="shoaku.shoaku.presentation.GoalsWindowFactory"
                     icon="icons/logo/logo.svg"
                     anchor="right"/>
-        <platform.lsp.serverSupportProvider implementation="shoaku.LanguageServerProvider"/>
-        <diff.DiffExtension implementation="shoaku.ReviewDiffExtension"/>
+        <platform.lsp.serverSupportProvider implementation="shoaku.shoaku.LanguageServerProvider"/>
+        <diff.DiffExtension implementation="shoaku.shoaku.presentation.ReviewDiffExtension"/>
     </extensions>
     <extensions defaultExtensionNs="com.intellij">
         <notificationGroup id="Shoaku" displayType="BALLOON" />

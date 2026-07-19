@@ -1,4 +1,4 @@
-package shoaku
+package shoaku.shoaku.presentation
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -37,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -60,12 +63,30 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
+import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icon.PathIconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import shoaku.shoaku.AgentStatusUi
+import shoaku.shoaku.AppLanguageServer
+import shoaku.shoaku.ApplyDiffParams
+import shoaku.shoaku.DidChangeGoalsFilePath
+import shoaku.shoaku.GoalFilter
+import shoaku.shoaku.Item
+import shoaku.shoaku.LanguageServerProvider
+import shoaku.shoaku.Message
+import shoaku.shoaku.ReplyParams
+import shoaku.shoaku.ReviewComment
+import shoaku.shoaku.ShoakuSettings
+import shoaku.shoaku.ShoakuViewModel
+import shoaku.shoaku.ShowDiffParams
+import shoaku.shoaku.StartFinalCheckParams
+import shoaku.shoaku.StartSessionParams
+import shoaku.shoaku.TokenUsageUi
 import java.awt.Dimension
 import java.beans.PropertyChangeListener
 import java.text.NumberFormat
 import java.util.*
+import kotlin.collections.first
 import kotlin.math.abs
 
 class GoalsWindowFactory : ToolWindowFactory {
@@ -312,7 +333,7 @@ private fun SessionHeaderItem(
 private fun SessionListContent(
     goals: List<Item>,
     filter: GoalFilter,
-    filePathState: androidx.compose.foundation.text.input.TextFieldState,
+    filePathState: TextFieldState,
     project: Project?,
     modifier: Modifier = Modifier,
     onFilterChange: (GoalFilter) -> Unit,
@@ -1299,7 +1320,7 @@ private fun TokenUsageIndicator(
         if (expanded && tokenUsage != null) {
             Popup(
                 alignment = Alignment.TopEnd,
-                offset = androidx.compose.ui.unit.IntOffset(0, 32),
+                offset = IntOffset(0, 32),
                 onDismissRequest = { expanded = false },
                 properties = PopupProperties(
                     focusable = true,
@@ -1435,14 +1456,14 @@ private fun TokenUsageCard(
             ) {
                 Text(
                     text = buildAnnotatedString {
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
+                        withStyle(SpanStyle(color = TodoColors.popupSecondaryText)) {
                             append(formatTokenCount(totalTokens))
                         }
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
+                        withStyle(SpanStyle(color = TodoColors.popupSecondaryText)) {
                             append(" / ")
                         }
                         withStyle(
-                            androidx.compose.ui.text.SpanStyle(
+                            SpanStyle(
                                 color = if (addButtonHovered) TodoColors.primaryText else TodoColors.popupSecondaryText
                             )
                         ) {
@@ -2006,12 +2027,14 @@ private fun AgentMessageContent(
                         lineHeight = (headingFontSize(block.level).value + 6).sp
                     )
                 )
-                is AgentMessageBlock.UnorderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEach { MarkdownListItem(marker = "•", text = it, onLinkClick = onLinkClick) }
-                }
-                is AgentMessageBlock.OrderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEach { (number, item) -> MarkdownListItem(marker = "$number.", text = item, onLinkClick = onLinkClick) }
-                }
+                is AgentMessageBlock.UnorderedList -> MarkdownList(
+                    items = block.items.map { MarkdownListEntry(marker = "•", text = it) },
+                    onLinkClick = onLinkClick
+                )
+                is AgentMessageBlock.OrderedList -> MarkdownList(
+                    items = block.items.map { (number, item) -> MarkdownListEntry(marker = "$number.", text = item) },
+                    onLinkClick = onLinkClick
+                )
                 is AgentMessageBlock.Quote -> Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -2058,6 +2081,11 @@ private sealed interface AgentMessageBlock {
 
 private const val MarkdownLinkTag = "markdown-link"
 
+private data class MarkdownListEntry(
+    val marker: String,
+    val text: String
+)
+
 @Composable
 private fun MarkdownTextBlock(
     text: String,
@@ -2086,22 +2114,55 @@ private fun MarkdownTextBlock(
 }
 
 @Composable
+private fun MarkdownList(
+    items: List<MarkdownListEntry>,
+    onLinkClick: ((String) -> Unit)? = null
+) {
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    val markerStyle = TextStyle(fontSize = 13.sp)
+    val markerColumnWidth = with(density) {
+        maxOf(
+            16.dp.toPx(),
+            items.maxOfOrNull { entry ->
+                textMeasurer.measure(entry.marker, style = markerStyle).size.width.toFloat()
+            } ?: 0f
+        ).toDp()
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        items.forEach { entry ->
+            MarkdownListItem(
+                marker = entry.marker,
+                text = entry.text,
+                markerColumnWidth = markerColumnWidth,
+                onLinkClick = onLinkClick
+            )
+        }
+    }
+}
+
+@Composable
 private fun MarkdownListItem(
     marker: String,
     text: String,
+    markerColumnWidth: Dp,
     onLinkClick: ((String) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.Top
     ) {
-        Text(
-            text = marker,
-            color = TodoColors.secondaryText,
-            fontSize = 13.sp,
-            modifier = Modifier.widthIn(min = 18.dp)
-        )
+        Box(modifier = Modifier.width(markerColumnWidth)) {
+            Text(
+                text = marker,
+                color = TodoColors.secondaryText,
+                fontSize = 13.sp,
+                textAlign = TextAlign.End,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
         MarkdownTextBlock(
             text = text,
             onLinkClick = onLinkClick,
@@ -2413,7 +2474,7 @@ private fun GoalFilterButton(
 
 @Composable
 private fun ToolbarIconButton(
-    iconKey: org.jetbrains.jewel.ui.icon.IconKey,
+    iconKey: IconKey,
     contentDescription: String,
     selected: Boolean = false,
     modifier: Modifier = Modifier,
@@ -2917,8 +2978,14 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             ),
             messages = listOf(
                 Message(type = "commandExecution", command = "file read"),
-                Message(type = "agentMessage", text = "I need one detail before changing the layout.\n\nShould the history stay hidden until opened from the current task view?"),
-                Message(type = "userMessage", text = "Keep history hidden by default and show only the latest short response near the current task."),
+                Message(
+                    type = "agentMessage",
+                    text = "I need one detail before changing the layout.\n\nShould the history stay hidden until opened from the current task view?"
+                ),
+                Message(
+                    type = "userMessage",
+                    text = "Keep history hidden by default and show only the latest short response near the current task."
+                ),
                 Message(type = "commandExecution", command = "execute cmd"),
                 Message(
                     type = "agentMessage",

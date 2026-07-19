@@ -1,4 +1,4 @@
-package shoaku
+package shoaku.shoaku.presentation
 
 import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.DiffContext
@@ -20,6 +20,8 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
+import shoaku.shoaku.ReviewComment
+import shoaku.shoaku.ShoakuSettings
 import java.net.URI
 import java.util.WeakHashMap
 

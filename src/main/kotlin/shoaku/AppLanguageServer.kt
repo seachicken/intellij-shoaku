@@ -1,4 +1,4 @@
-package shoaku
+package shoaku.shoaku
 
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
 import org.eclipse.lsp4j.services.LanguageServer
