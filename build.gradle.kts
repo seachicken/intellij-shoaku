@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.2.0"
+version = "0.2.1"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -55,8 +55,9 @@ intellijPlatform {
         changeNotes = """
             <h2>Improvements</h2>
             <ul>
-                <li>To facilitate understanding, the Navigator poses questions without offering solutions.</li>
-                <li>Send a notification if the AI and human direction diverge while editing the Goals file.</li>
+                <li>Focus navigator on presenting questions.</li>
+                <li>Show explorer diff for final check.</li>
+                <li>Compress tokens to reduce costs.</li>
             </ul>
         """.trimIndent()
     }
