@@ -91,6 +91,7 @@ data class Message(
     val type: String,
     val turnId: String? = null,
     val phase: String? = null,
+    val kind: String? = null,
     val text: String? = null,
     val command: String? = null,
     val alignmentScore: Double? = null,

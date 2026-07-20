@@ -452,6 +452,7 @@ private fun SessionDetailContent(
     modifier: Modifier = Modifier
 ) {
     val diffResponse = session.shoakuId?.let { viewModel.diffResponses[it] }
+    val finalCheckState = remember(session.shoakuId) { FinalCheckDisplayState() }
     if (chatCollapsed) {
         Column(
             modifier = modifier,
@@ -463,6 +464,7 @@ private fun SessionDetailContent(
                 filePath = filePath,
                 viewModel = viewModel,
                 project = project,
+                finalCheckState = finalCheckState,
                 modifier = Modifier.weight(1f).fillMaxWidth()
             )
             CollapsedChatBar(
@@ -479,6 +481,7 @@ private fun SessionDetailContent(
             filePath = filePath,
             viewModel = viewModel,
             project = project,
+            finalCheckState = finalCheckState,
             todoPaneFraction = todoPaneFraction,
             onTodoPaneFractionChange = onTodoPaneFractionChange,
             onCollapseChat = { onChatCollapsedChange(true) },
@@ -494,6 +497,7 @@ private fun SessionDetailSplitter(
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?,
+    finalCheckState: FinalCheckDisplayState,
     todoPaneFraction: Float,
     onTodoPaneFractionChange: (Float) -> Unit,
     onCollapseChat: () -> Unit,
@@ -504,6 +508,7 @@ private fun SessionDetailSplitter(
     val filePathState = rememberUpdatedState(filePath)
     val viewModelState = rememberUpdatedState(viewModel)
     val projectState = rememberUpdatedState(project)
+    val finalCheckStateState = rememberUpdatedState(finalCheckState)
     val splitter = remember {
         OnePixelSplitter(true, todoPaneFraction, 0.2f, 0.92f).apply {
             dividerWidth = JBUI.scale(5)
@@ -519,7 +524,8 @@ private fun SessionDetailSplitter(
                     diffResponse = diffResponseState.value,
                     filePath = filePathState.value,
                     viewModel = viewModelState.value,
-                    project = projectState.value
+                    project = projectState.value,
+                    finalCheckState = finalCheckStateState.value
                 )
             }.apply {
                 minimumSize = Dimension(0, JBUI.scale(120))
@@ -569,20 +575,27 @@ private fun SessionTaskPane(
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?,
+    finalCheckState: FinalCheckDisplayState,
     modifier: Modifier = Modifier
 ) {
     val todoItems = session.children.filter { it.checked != null }
     val remainingCount = todoItems.count { it.checked == false }
     val isChecklistComplete = todoItems.isNotEmpty() && remainingCount == 0
+    val isFinalCheckActive = isChecklistComplete
     val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
     val messages = session.messages.orEmpty()
     val taskResponse = remember(messages) { taskResponseDisplay(messages) }
-    val finalCheckMessage = remember(messages) { finalCheckResponse(messages) }
-    var finalCheckThinking by remember(session.shoakuId) { mutableStateOf(false) }
+    val finalCheckMessage = remember(messages, finalCheckState.startMessageCount.value) {
+        finalCheckState.startMessageCount.value?.let { startMessageCount ->
+            finalCheckResponse(messages.drop(startMessageCount))
+        }
+    }
+    val finalCheckRequested = finalCheckState.requested.value
+    val finalCheckThinking = finalCheckState.thinking.value
 
     LaunchedEffect(messages.size, finalCheckMessage) {
         if (finalCheckMessage != null) {
-            finalCheckThinking = false
+            finalCheckState.thinking.value = false
         }
     }
     val comparableResponseText = remember(taskResponse) {
@@ -645,10 +658,13 @@ private fun SessionTaskPane(
                 TaskListCard(
                     todoItems = todoItems,
                     activeItemIndex = activeItemIndex,
-                    response = taskResponse,
+                    response = taskResponse?.takeUnless { isFinalCheckActive },
                     reviewEnabled = isChecklistComplete,
+                    finalCheckActive = isFinalCheckActive,
                     selectedReviewLocation = viewModel.selectedReviewLocation,
-                    reviewResponse = if (finalCheckThinking) {
+                    reviewResponse = if (!isFinalCheckActive || !finalCheckRequested) {
+                        null
+                    } else if (finalCheckThinking) {
                         Message(
                             type = "agentMessage",
                             phase = "final_check",
@@ -663,7 +679,9 @@ private fun SessionTaskPane(
                         }
                     },
                     onReviewClick = {
-                        finalCheckThinking = true
+                        finalCheckState.requested.value = true
+                        finalCheckState.thinking.value = true
+                        finalCheckState.startMessageCount.value = messages.size
                         project?.sendNotificationToShoakuServer { server ->
                             server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
                         }
@@ -707,6 +725,13 @@ private const val AlignmentGapMessageThreshold = 0.9
 private const val AlignmentGapReassuringMessage = "Aligned with goal"
 private const val ThinkingMessage = "Thinking"
 private const val ReviewTaskTitle = "Final Check"
+private const val NoFinalCheckIssuesMessage = "No issues found."
+
+private class FinalCheckDisplayState {
+    val requested = mutableStateOf(false)
+    val thinking = mutableStateOf(false)
+    val startMessageCount = mutableStateOf<Int?>(null)
+}
 
 private data class TaskResponseDisplay(
     val text: String,
@@ -727,6 +752,7 @@ private fun TaskListCard(
     activeItemIndex: Int,
     response: TaskResponseDisplay?,
     reviewEnabled: Boolean,
+    finalCheckActive: Boolean,
     selectedReviewLocation: ReviewLocation?,
     reviewResponse: Message?,
     onReviewLinkClick: (String, List<ReviewComment>) -> Unit,
@@ -772,29 +798,43 @@ private fun TaskListCard(
                     )
                 }
             }
-            CurrentTaskGroup(
-                title = ReviewTaskTitle,
-                response = reviewResponse?.let {
-                    TaskResponseDisplay(
-                        text = it.text.orEmpty(),
-                        isThinking = it.text == ThinkingMessage
-                    )
-                },
-                onReviewLinkClick = { link ->
-                    onReviewLinkClick(link, reviewResponse?.inlineReviewComments.orEmpty())
-                },
-                reviewComments = reviewResponse?.inlineReviewComments.orEmpty(),
-                selectedReviewLocation = selectedReviewLocation,
-                onReviewCommentClick = { comment ->
-                    onReviewLinkClick(
-                        "shoaku-review://${comment.path}#L${comment.line}",
-                        reviewResponse?.inlineReviewComments.orEmpty()
-                    )
-                },
-                enabled = reviewEnabled,
-                buttonStyle = true,
-                onClick = if (reviewEnabled) onReviewClick else null,
-            )
+            if (finalCheckActive) {
+                CurrentTaskGroup(
+                    title = ReviewTaskTitle,
+                    response = reviewResponse?.let {
+                        TaskResponseDisplay(
+                            text = it.text?.takeIf(String::isNotBlank) ?: NoFinalCheckIssuesMessage,
+                            isThinking = it.text == ThinkingMessage,
+                            isFixedMessage = it.text.isNullOrBlank()
+                        )
+                    },
+                    onReviewLinkClick = { link ->
+                        onReviewLinkClick(link, reviewResponse?.inlineReviewComments.orEmpty())
+                    },
+                    reviewComments = reviewResponse?.inlineReviewComments.orEmpty(),
+                    selectedReviewLocation = selectedReviewLocation,
+                    onReviewCommentClick = { comment ->
+                        onReviewLinkClick(
+                            "shoaku-review://${comment.path}#L${comment.line}",
+                            reviewResponse?.inlineReviewComments.orEmpty()
+                        )
+                    },
+                    enabled = reviewEnabled,
+                    buttonStyle = true,
+                    onClick = if (reviewEnabled) onReviewClick else null,
+                )
+            } else {
+                TodoRow(
+                    title = ReviewTaskTitle,
+                    subtitle = null,
+                    meta = null,
+                    completed = false,
+                    compact = true,
+                    emphasis = TodoRowEmphasis.MutedPending,
+                    enabled = false,
+                    buttonStyle = true
+                )
+            }
         }
     }
 }
@@ -1217,9 +1257,7 @@ private fun taskResponseDisplay(messages: List<Message>): TaskResponseDisplay? {
 private fun finalCheckResponse(messages: List<Message>): Message? =
     messages.lastOrNull {
         it.type == "agentMessage" &&
-            it.phase == "final_answer" &&
-            it.alignmentScore == null &&
-            !it.text.isNullOrBlank()
+            it.phase == "final_answer"
     }
 
 @Composable

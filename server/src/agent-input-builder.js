@@ -1,12 +1,14 @@
 export const inputType = {
   GOAL: 1,
-  LSP: 2
+  LSP: 2,
+  TOKEN_USAGE: 3
 }
 
 export default class AgentInputBuilder {
-  constructor(rootPath, debounceMs, maxEvents = 20) {
+  constructor(rootPath, debounceMs, compactionTriggerTokens, maxEvents = 20) {
     this.rootPath = rootPath;
     this.debounceMs = debounceMs;
+    this.compactionTriggerTokens = compactionTriggerTokens;
     this.maxEvents = maxEvents;
     this.listeners = [];
     this.events = [];
@@ -30,6 +32,7 @@ export default class AgentInputBuilder {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       let lastOperation = null;
+      let lastInputTokens = 0;
       for (const event of this.events) {
         switch (event.type) {
           case inputType.LSP:
@@ -43,9 +46,13 @@ export default class AgentInputBuilder {
           case inputType.GOAL:
             lastOperation = event.content;
             break;
+          case inputType.TOKEN_USAGE:
+            lastInputTokens = event.lastInputTokens;
+            break;
         }
       }
 
+      const shouldCompact = lastInputTokens >= this.compactionTriggerTokens;
       switch (event.type) {
         case inputType.LSP:
           if (lastOperation) {
@@ -53,7 +60,8 @@ export default class AgentInputBuilder {
               listener([
                 'Driver operations:',
                 lastOperation,
-              ].join('\n'));
+              ].join('\n'),
+              shouldCompact);
             }
             lastOperation = null;
           }
@@ -61,7 +69,7 @@ export default class AgentInputBuilder {
         case inputType.GOAL:
           if (lastOperation) {
             for (const listener of this.listeners) {
-              listener(lastOperation);
+              listener(lastOperation, shouldCompact);
             }
             lastOperation = null;
           }
