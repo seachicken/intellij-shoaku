@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.intellij.openapi.components.*
+import shoaku.presentation.ReviewLocation
 
 @Service
 @State(name = "shoaku-project", storages = [Storage(StoragePathMacros.WORKSPACE_FILE)])

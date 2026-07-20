@@ -12,6 +12,7 @@ import { renderSummary, renderSummaryDiff } from './diff-snippet.js';
 import { cleanupStaleBranches } from './git.js';
 import parser from './parser.js';
 
+const compactionTriggerTokens = 100_000;
 const exec = promisify(child_process.exec);
 const appServer = spawn('codex', ['app-server'], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -93,6 +94,15 @@ appServer.stdout.on('data', async (chunk) => {
         const session = shoakuToSession.get(shoakuId);
         if (message.params.threadId === session.navigatorThreadId) {
           usage.navigatorTokens = message.params.tokenUsage.total.totalTokens;
+
+          lspInputBuilder.ingest({
+            type: inputType.TOKEN_USAGE,
+            lastInputTokens: message.params.tokenUsage.last.inputTokens
+          });
+          goalInputBuilder.ingest({
+            type: inputType.TOKEN_USAGE,
+            lastInputTokens: message.params.tokenUsage.last.inputTokens
+          });
         } else {
           usage.explorerTokens = message.params.tokenUsage.total.totalTokens;
         }
@@ -466,10 +476,17 @@ process.stdin.on('data', async (chunk) => {
 
           cleanupStaleBranches(initializeParams.rootPath);
 
-          lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
-          lspInputBuilder.onAgentInput(async (input) => {
+          lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000, compactionTriggerTokens);
+          lspInputBuilder.onAgentInput(async (input, shouldCompact) => {
             if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
               return;
+            }
+
+            if (shouldCompact) {
+              logWarn('should compact with lsp');
+              await sendAppRequest('thread/compact/start', {
+                threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+              });
             }
 
             await sendAppRequest('thread/inject_items', {
@@ -535,10 +552,17 @@ process.stdin.on('data', async (chunk) => {
             );
           });
 
-          goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
-          goalInputBuilder.onAgentInput(async (input) => {
+          goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000, compactionTriggerTokens);
+          goalInputBuilder.onAgentInput(async (input, shouldCompact) => {
             if (!input?.shoakuId || !shoakuToSession.has(input.shoakuId)) {
               return;
+            }
+
+            if (shouldCompact) {
+              logWarn('should compact with goal');
+              await sendAppRequest('thread/compact/start', {
+                threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+              });
             }
 
             await sendAppRequest('thread/inject_items', {

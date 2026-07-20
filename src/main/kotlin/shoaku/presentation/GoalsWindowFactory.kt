@@ -1,4 +1,4 @@
-package shoaku
+package shoaku.presentation
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -37,6 +39,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -60,12 +63,30 @@ import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.ui.component.*
+import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icon.PathIconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
+import shoaku.AgentStatusUi
+import shoaku.AppLanguageServer
+import shoaku.ApplyDiffParams
+import shoaku.DidChangeGoalsFilePath
+import shoaku.GoalFilter
+import shoaku.Item
+import shoaku.LanguageServerProvider
+import shoaku.Message
+import shoaku.ReplyParams
+import shoaku.ReviewComment
+import shoaku.ShoakuSettings
+import shoaku.ShoakuViewModel
+import shoaku.ShowDiffParams
+import shoaku.StartFinalCheckParams
+import shoaku.StartSessionParams
+import shoaku.TokenUsageUi
 import java.awt.Dimension
 import java.beans.PropertyChangeListener
 import java.text.NumberFormat
 import java.util.*
+import kotlin.collections.first
 import kotlin.math.abs
 
 class GoalsWindowFactory : ToolWindowFactory {
@@ -312,7 +333,7 @@ private fun SessionHeaderItem(
 private fun SessionListContent(
     goals: List<Item>,
     filter: GoalFilter,
-    filePathState: androidx.compose.foundation.text.input.TextFieldState,
+    filePathState: TextFieldState,
     project: Project?,
     modifier: Modifier = Modifier,
     onFilterChange: (GoalFilter) -> Unit,
@@ -431,6 +452,7 @@ private fun SessionDetailContent(
     modifier: Modifier = Modifier
 ) {
     val diffResponse = session.shoakuId?.let { viewModel.diffResponses[it] }
+    val finalCheckState = remember(session.shoakuId) { FinalCheckDisplayState() }
     if (chatCollapsed) {
         Column(
             modifier = modifier,
@@ -442,6 +464,7 @@ private fun SessionDetailContent(
                 filePath = filePath,
                 viewModel = viewModel,
                 project = project,
+                finalCheckState = finalCheckState,
                 modifier = Modifier.weight(1f).fillMaxWidth()
             )
             CollapsedChatBar(
@@ -458,6 +481,7 @@ private fun SessionDetailContent(
             filePath = filePath,
             viewModel = viewModel,
             project = project,
+            finalCheckState = finalCheckState,
             todoPaneFraction = todoPaneFraction,
             onTodoPaneFractionChange = onTodoPaneFractionChange,
             onCollapseChat = { onChatCollapsedChange(true) },
@@ -473,6 +497,7 @@ private fun SessionDetailSplitter(
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?,
+    finalCheckState: FinalCheckDisplayState,
     todoPaneFraction: Float,
     onTodoPaneFractionChange: (Float) -> Unit,
     onCollapseChat: () -> Unit,
@@ -483,6 +508,7 @@ private fun SessionDetailSplitter(
     val filePathState = rememberUpdatedState(filePath)
     val viewModelState = rememberUpdatedState(viewModel)
     val projectState = rememberUpdatedState(project)
+    val finalCheckStateState = rememberUpdatedState(finalCheckState)
     val splitter = remember {
         OnePixelSplitter(true, todoPaneFraction, 0.2f, 0.92f).apply {
             dividerWidth = JBUI.scale(5)
@@ -498,7 +524,8 @@ private fun SessionDetailSplitter(
                     diffResponse = diffResponseState.value,
                     filePath = filePathState.value,
                     viewModel = viewModelState.value,
-                    project = projectState.value
+                    project = projectState.value,
+                    finalCheckState = finalCheckStateState.value
                 )
             }.apply {
                 minimumSize = Dimension(0, JBUI.scale(120))
@@ -548,20 +575,27 @@ private fun SessionTaskPane(
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?,
+    finalCheckState: FinalCheckDisplayState,
     modifier: Modifier = Modifier
 ) {
     val todoItems = session.children.filter { it.checked != null }
     val remainingCount = todoItems.count { it.checked == false }
     val isChecklistComplete = todoItems.isNotEmpty() && remainingCount == 0
+    val isFinalCheckActive = isChecklistComplete
     val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
     val messages = session.messages.orEmpty()
     val taskResponse = remember(messages) { taskResponseDisplay(messages) }
-    val finalCheckMessage = remember(messages) { finalCheckResponse(messages) }
-    var finalCheckThinking by remember(session.shoakuId) { mutableStateOf(false) }
+    val finalCheckMessage = remember(messages, finalCheckState.startMessageCount.value) {
+        finalCheckState.startMessageCount.value?.let { startMessageCount ->
+            finalCheckResponse(messages.drop(startMessageCount))
+        }
+    }
+    val finalCheckRequested = finalCheckState.requested.value
+    val finalCheckThinking = finalCheckState.thinking.value
 
     LaunchedEffect(messages.size, finalCheckMessage) {
         if (finalCheckMessage != null) {
-            finalCheckThinking = false
+            finalCheckState.thinking.value = false
         }
     }
     val comparableResponseText = remember(taskResponse) {
@@ -624,10 +658,13 @@ private fun SessionTaskPane(
                 TaskListCard(
                     todoItems = todoItems,
                     activeItemIndex = activeItemIndex,
-                    response = taskResponse,
+                    response = taskResponse?.takeUnless { isFinalCheckActive },
                     reviewEnabled = isChecklistComplete,
+                    finalCheckActive = isFinalCheckActive,
                     selectedReviewLocation = viewModel.selectedReviewLocation,
-                    reviewResponse = if (finalCheckThinking) {
+                    reviewResponse = if (!isFinalCheckActive || !finalCheckRequested) {
+                        null
+                    } else if (finalCheckThinking) {
                         Message(
                             type = "agentMessage",
                             phase = "final_check",
@@ -642,7 +679,9 @@ private fun SessionTaskPane(
                         }
                     },
                     onReviewClick = {
-                        finalCheckThinking = true
+                        finalCheckState.requested.value = true
+                        finalCheckState.thinking.value = true
+                        finalCheckState.startMessageCount.value = messages.size
                         project?.sendNotificationToShoakuServer { server ->
                             server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
                         }
@@ -686,6 +725,13 @@ private const val AlignmentGapMessageThreshold = 0.9
 private const val AlignmentGapReassuringMessage = "Aligned with goal"
 private const val ThinkingMessage = "Thinking"
 private const val ReviewTaskTitle = "Final Check"
+private const val NoFinalCheckIssuesMessage = "No issues found."
+
+private class FinalCheckDisplayState {
+    val requested = mutableStateOf(false)
+    val thinking = mutableStateOf(false)
+    val startMessageCount = mutableStateOf<Int?>(null)
+}
 
 private data class TaskResponseDisplay(
     val text: String,
@@ -706,6 +752,7 @@ private fun TaskListCard(
     activeItemIndex: Int,
     response: TaskResponseDisplay?,
     reviewEnabled: Boolean,
+    finalCheckActive: Boolean,
     selectedReviewLocation: ReviewLocation?,
     reviewResponse: Message?,
     onReviewLinkClick: (String, List<ReviewComment>) -> Unit,
@@ -720,9 +767,10 @@ private fun TaskListCard(
     ) {
         if (todoItems.isEmpty()) {
             Text(
-                text = "No checklist items yet.",
+                text = "No tasks yet.",
                 color = TodoColors.secondaryText,
-                fontSize = 12.sp
+                fontSize = 12.sp,
+                modifier = Modifier.padding(vertical = 12.dp)
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -750,30 +798,43 @@ private fun TaskListCard(
                     )
                 }
             }
-            CurrentTaskGroup(
-                title = ReviewTaskTitle,
-                response = reviewResponse?.let {
-                    TaskResponseDisplay(
-                        text = it.text.orEmpty(),
-                        isThinking = it.text == ThinkingMessage
-                    )
-                },
-                onReviewLinkClick = { link ->
-                    onReviewLinkClick(link, reviewResponse?.inlineReviewComments.orEmpty())
-                },
-                reviewComments = reviewResponse?.inlineReviewComments.orEmpty(),
-                selectedReviewLocation = selectedReviewLocation,
-                onReviewCommentClick = { comment ->
-                    onReviewLinkClick(
-                        "shoaku-review://${comment.path}#L${comment.line}",
-                        reviewResponse?.inlineReviewComments.orEmpty()
-                    )
-                },
-                enabled = reviewEnabled,
-                buttonStyle = true,
-                onClick = if (reviewEnabled) onReviewClick else null,
-                disabledReason = "Complete all tasks before running the final check."
-            )
+            if (finalCheckActive) {
+                CurrentTaskGroup(
+                    title = ReviewTaskTitle,
+                    response = reviewResponse?.let {
+                        TaskResponseDisplay(
+                            text = it.text?.takeIf(String::isNotBlank) ?: NoFinalCheckIssuesMessage,
+                            isThinking = it.text == ThinkingMessage,
+                            isFixedMessage = it.text.isNullOrBlank()
+                        )
+                    },
+                    onReviewLinkClick = { link ->
+                        onReviewLinkClick(link, reviewResponse?.inlineReviewComments.orEmpty())
+                    },
+                    reviewComments = reviewResponse?.inlineReviewComments.orEmpty(),
+                    selectedReviewLocation = selectedReviewLocation,
+                    onReviewCommentClick = { comment ->
+                        onReviewLinkClick(
+                            "shoaku-review://${comment.path}#L${comment.line}",
+                            reviewResponse?.inlineReviewComments.orEmpty()
+                        )
+                    },
+                    enabled = reviewEnabled,
+                    buttonStyle = true,
+                    onClick = if (reviewEnabled) onReviewClick else null,
+                )
+            } else {
+                TodoRow(
+                    title = ReviewTaskTitle,
+                    subtitle = null,
+                    meta = null,
+                    completed = false,
+                    compact = true,
+                    emphasis = TodoRowEmphasis.MutedPending,
+                    enabled = false,
+                    buttonStyle = true
+                )
+            }
         }
     }
 }
@@ -789,7 +850,6 @@ private fun CurrentTaskGroup(
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true,
     buttonStyle: Boolean = false,
-    disabledReason: String? = null,
     modifier: Modifier = Modifier
 ) {
     val hasMessage = response != null
@@ -818,9 +878,8 @@ private fun CurrentTaskGroup(
                 emphasis = TodoRowEmphasis.Current,
                 enabled = enabled,
                 buttonStyle = buttonStyle,
-                hoverable = onClick != null || buttonStyle,
-                onClick = onClick,
-                disabledReason = disabledReason
+                hoverable = enabled && (onClick != null || buttonStyle),
+                onClick = onClick
             )
             AttachedResponseCard(
                 response = response,
@@ -1198,9 +1257,7 @@ private fun taskResponseDisplay(messages: List<Message>): TaskResponseDisplay? {
 private fun finalCheckResponse(messages: List<Message>): Message? =
     messages.lastOrNull {
         it.type == "agentMessage" &&
-            it.phase == "final_answer" &&
-            it.alignmentScore == null &&
-            !it.text.isNullOrBlank()
+            it.phase == "final_answer"
     }
 
 @Composable
@@ -1301,7 +1358,7 @@ private fun TokenUsageIndicator(
         if (expanded && tokenUsage != null) {
             Popup(
                 alignment = Alignment.TopEnd,
-                offset = androidx.compose.ui.unit.IntOffset(0, 32),
+                offset = IntOffset(0, 32),
                 onDismissRequest = { expanded = false },
                 properties = PopupProperties(
                     focusable = true,
@@ -1437,14 +1494,14 @@ private fun TokenUsageCard(
             ) {
                 Text(
                     text = buildAnnotatedString {
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
+                        withStyle(SpanStyle(color = TodoColors.popupSecondaryText)) {
                             append(formatTokenCount(totalTokens))
                         }
-                        withStyle(androidx.compose.ui.text.SpanStyle(color = TodoColors.popupSecondaryText)) {
+                        withStyle(SpanStyle(color = TodoColors.popupSecondaryText)) {
                             append(" / ")
                         }
                         withStyle(
-                            androidx.compose.ui.text.SpanStyle(
+                            SpanStyle(
                                 color = if (addButtonHovered) TodoColors.primaryText else TodoColors.popupSecondaryText
                             )
                         ) {
@@ -2008,12 +2065,14 @@ private fun AgentMessageContent(
                         lineHeight = (headingFontSize(block.level).value + 6).sp
                     )
                 )
-                is AgentMessageBlock.UnorderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEach { MarkdownListItem(marker = "•", text = it, onLinkClick = onLinkClick) }
-                }
-                is AgentMessageBlock.OrderedList -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    block.items.forEach { (number, item) -> MarkdownListItem(marker = "$number.", text = item, onLinkClick = onLinkClick) }
-                }
+                is AgentMessageBlock.UnorderedList -> MarkdownList(
+                    items = block.items.map { MarkdownListEntry(marker = "•", text = it) },
+                    onLinkClick = onLinkClick
+                )
+                is AgentMessageBlock.OrderedList -> MarkdownList(
+                    items = block.items.map { (number, item) -> MarkdownListEntry(marker = "$number.", text = item) },
+                    onLinkClick = onLinkClick
+                )
                 is AgentMessageBlock.Quote -> Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -2060,6 +2119,11 @@ private sealed interface AgentMessageBlock {
 
 private const val MarkdownLinkTag = "markdown-link"
 
+private data class MarkdownListEntry(
+    val marker: String,
+    val text: String
+)
+
 @Composable
 private fun MarkdownTextBlock(
     text: String,
@@ -2088,22 +2152,55 @@ private fun MarkdownTextBlock(
 }
 
 @Composable
+private fun MarkdownList(
+    items: List<MarkdownListEntry>,
+    onLinkClick: ((String) -> Unit)? = null
+) {
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    val markerStyle = TextStyle(fontSize = 13.sp)
+    val markerColumnWidth = with(density) {
+        maxOf(
+            16.dp.toPx(),
+            items.maxOfOrNull { entry ->
+                textMeasurer.measure(entry.marker, style = markerStyle).size.width.toFloat()
+            } ?: 0f
+        ).toDp()
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        items.forEach { entry ->
+            MarkdownListItem(
+                marker = entry.marker,
+                text = entry.text,
+                markerColumnWidth = markerColumnWidth,
+                onLinkClick = onLinkClick
+            )
+        }
+    }
+}
+
+@Composable
 private fun MarkdownListItem(
     marker: String,
     text: String,
+    markerColumnWidth: Dp,
     onLinkClick: ((String) -> Unit)? = null
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.Top
     ) {
-        Text(
-            text = marker,
-            color = TodoColors.secondaryText,
-            fontSize = 13.sp,
-            modifier = Modifier.widthIn(min = 18.dp)
-        )
+        Box(modifier = Modifier.width(markerColumnWidth)) {
+            Text(
+                text = marker,
+                color = TodoColors.secondaryText,
+                fontSize = 13.sp,
+                textAlign = TextAlign.End,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
         MarkdownTextBlock(
             text = text,
             onLinkClick = onLinkClick,
@@ -2415,7 +2512,7 @@ private fun GoalFilterButton(
 
 @Composable
 private fun ToolbarIconButton(
-    iconKey: org.jetbrains.jewel.ui.icon.IconKey,
+    iconKey: IconKey,
     contentDescription: String,
     selected: Boolean = false,
     modifier: Modifier = Modifier,
@@ -2448,7 +2545,6 @@ private fun TodoRow(
     emphasis: TodoRowEmphasis = TodoRowEmphasis.Default,
     enabled: Boolean = true,
     buttonStyle: Boolean = false,
-    disabledReason: String? = null,
     hoverable: Boolean = false,
     onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null
@@ -2513,27 +2609,6 @@ private fun TodoRow(
                         text = it,
                         fontSize = 12.sp,
                         color = if (enabled) TodoColors.secondaryText else TodoColors.disabledText
-                    )
-                }
-            }
-        }
-        if (!enabled && !disabledReason.isNullOrBlank() && isHovered) {
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = androidx.compose.ui.unit.IntOffset(8, -36),
-                properties = PopupProperties(focusable = false)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(TodoColors.popupSurface)
-                        .border(1.dp, TodoColors.popupBorder, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = disabledReason,
-                        fontSize = 12.sp,
-                        color = TodoColors.primaryText
                     )
                 }
             }
@@ -2941,8 +3016,14 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             ),
             messages = listOf(
                 Message(type = "commandExecution", command = "file read"),
-                Message(type = "agentMessage", text = "I need one detail before changing the layout.\n\nShould the history stay hidden until opened from the current task view?"),
-                Message(type = "userMessage", text = "Keep history hidden by default and show only the latest short response near the current task."),
+                Message(
+                    type = "agentMessage",
+                    text = "I need one detail before changing the layout.\n\nShould the history stay hidden until opened from the current task view?"
+                ),
+                Message(
+                    type = "userMessage",
+                    text = "Keep history hidden by default and show only the latest short response near the current task."
+                ),
                 Message(type = "commandExecution", command = "execute cmd"),
                 Message(
                     type = "agentMessage",

@@ -1,8 +1,6 @@
 package shoaku
 
 import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.notification.Notification
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
@@ -13,7 +11,6 @@ import com.intellij.platform.lsp.api.LspServerSupportProvider
 import com.intellij.platform.lsp.api.ProjectWideLspServerDescriptor
 import java.nio.file.Files
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
-import java.nio.file.Path
 
 class LanguageServerProvider : LspServerSupportProvider {
     override fun fileOpened(
