@@ -1,6 +1,6 @@
 # Shoaku for IntelliJ
 
-[![JetBrains plugins](https://img.shields.io/jetbrains/plugin/v/32426-shoaku--your-coding-navigator.svg)](https://plugins.jetbrains.com/plugin/32426-shoaku--your-coding-navigator)
+[![JetBrains plugins](https://img.shields.io/jetbrains/plugin/v/32426-shoaku--understanding-first-coding.svg)](https://plugins.jetbrains.com/plugin/32426-shoaku--understanding-first-coding)
 
 <a href="https://youtu.be/bpcHnJt88sc?cc_load_policy=1" target="_blank">
   <img src="https://img.youtube.com/vi/bpcHnJt88sc/maxresdefault.jpg" alt="Shoaku for Intellij" width="480" height="270" />
