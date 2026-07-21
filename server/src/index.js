@@ -193,11 +193,11 @@ async function startNewSession(goalItem) {
   await Promise.all([
     sendAppRequest('thread/name/set', {
       threadId: navigatorThreadId,
-      name: `[${shoakuId}:navigator] ${goalItem.content}`
+      name: `[${shoakuId}] ${goalItem.content}`
     }),
     sendAppRequest('thread/name/set', {
       threadId: explorerThreadId,
-      name: `[${shoakuId}:explorer] ${goalItem.content}`
+      name: `[${shoakuId}] ${goalItem.content}`
     }),
   ]);
 
