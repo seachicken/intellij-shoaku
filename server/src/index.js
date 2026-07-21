@@ -483,9 +483,8 @@ process.stdin.on('data', async (chunk) => {
             }
 
             if (shouldCompact) {
-              logWarn('should compact with lsp');
               await sendAppRequest('thread/compact/start', {
-                threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+                threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
               });
             }
 
@@ -559,7 +558,6 @@ process.stdin.on('data', async (chunk) => {
             }
 
             if (shouldCompact) {
-              logWarn('should compact with goal');
               await sendAppRequest('thread/compact/start', {
                 threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
               });
