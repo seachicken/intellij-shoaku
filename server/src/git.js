@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import child_process from 'node:child_process';
 
@@ -19,7 +20,7 @@ export async function cleanupStaleBranches(workspacePath, {
   });
 
   const livedWorktrees = [];
-  await worktreeListFun(workspacePath).then(({ stdout }) => {
+  await worktreeListFun(workspacePath).then(async ({ stdout }) => {
     let currentWorktree = {};
     for (const line of stdout.split('\n')) {
       const worktreePrefix = 'worktree ';
@@ -31,7 +32,13 @@ export async function cleanupStaleBranches(workspacePath, {
         currentWorktree.branch = line.slice(branchPrefix.length);
       }
       if (line.startsWith('prunable ')) {
-        worktreeDeleteFun(workspacePath, currentWorktree.path);
+        try {
+          await worktreeDeleteFun(workspacePath, currentWorktree.path);
+        } catch (e) {
+          // If the .git file is missing or the directory cannot be identified as the worktree, a fallback will be performed to forcibly delete the worktree directory.
+          await rm(currentWorktree.path, { recursive: true, force: true });
+          await exec(`git -C ${workspacePath} worktree prune`);
+        }
       } else {
         livedWorktrees.push(currentWorktree);
       }
