@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Shoaku — understand the code you ship</title>
+  <desc id="desc">An IntelliJ workflow where you work, an agent explores, and both implementations are compared together.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#faf9ff"/>
+      <stop offset="1" stop-color="#e9e5f5"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#e94184"/>
+      <stop offset="1" stop-color="#6547c7"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="url(#background)"/>
+  <g transform="translate(58 168)">
+    <polyline fill="none" stroke="url(#accent)" stroke-linecap="round" stroke-linejoin="round" stroke-width="13" points="12 70 84 70 68 46 28 46 40 26 56 26 48 14"/>
+    <text x="105" y="62" fill="#202137" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="-1">Shoaku</text>
+    <text x="0" y="112" fill="#6547c7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="600" letter-spacing="2">UNDERSTANDING-FIRST CODING FOR INTELLIJ</text>
+  </g>
+
+  <text x="58" y="337" fill="#202137" font-family="Inter, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-3">Understand the code</text>
+  <text x="58" y="401" fill="#6547c7" font-family="Inter, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-3">you ship.</text>
+  <rect x="59" y="416" width="316" height="8" rx="4" fill="#72d8f4"/>
+
+  <g>
+    <rect x="620" y="135" width="548" height="360" rx="25" fill="#fff"/>
+    <rect x="632" y="148" width="524" height="334" rx="18" fill="#25272b"/>
+    <rect x="632" y="148" width="524" height="28" rx="18" fill="#32343a"/>
+    <circle cx="658" cy="162" r="4" fill="#ec6b9e"/><circle cx="674" cy="162" r="4" fill="#f4bd67"/><circle cx="690" cy="162" r="4" fill="#7dcf92"/>
+    <rect x="648" y="188" width="270" height="270" rx="7" fill="#1f2024"/>
+    <rect x="665" y="213" width="154" height="8" rx="4" fill="#4f5362"/><rect x="665" y="232" width="205" height="8" rx="4" fill="#454955"/>
+    <rect x="685" y="251" width="126" height="8" rx="4" fill="#3c3f48"/><rect x="685" y="270" width="178" height="8" rx="4" fill="#3c3f48"/>
+    <rect x="665" y="289" width="95" height="8" rx="4" fill="#4f5362"/><rect x="665" y="322" width="175" height="8" rx="4" fill="#3c3f48"/>
+    <rect x="665" y="341" width="143" height="8" rx="4" fill="#3c3f48"/><rect x="665" y="360" width="162" height="8" rx="4" fill="#3c3f48"/>
+    <rect x="930" y="188" width="210" height="270" rx="7" fill="#2c2d33"/>
+    <text x="947" y="211" fill="#fff" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700">Shoaku</text>
+    <text x="947" y="232" fill="#a9aab7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">SHARED GOAL</text>
+    <rect x="947" y="243" width="178" height="42" rx="7" fill="#3b3d45"/>
+    <text x="959" y="262" fill="#fff" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="600">Fix the root cause</text>
+    <text x="959" y="277" fill="#a9aab7" font-family="Inter, Arial, sans-serif" font-size="9">2 approaches in progress</text>
+    <text x="947" y="306" fill="#a9aab7" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9">FINAL CHECK</text>
+    <rect x="947" y="318" width="178" height="60" rx="7" fill="#34364a" stroke="#6578d5"/>
+    <circle cx="962" cy="338" r="5" fill="#72d8f4"/><text x="976" y="342" fill="#fff" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="600">Your work</text>
+    <circle cx="962" cy="360" r="5" fill="#e94184"/><text x="976" y="364" fill="#fff" font-family="Inter, Arial, sans-serif" font-size="10" font-weight="600">AI exploration</text>
+    <rect x="947" y="400" width="178" height="28" rx="7" fill="#6547c7"/>
+    <text x="972" y="419" fill="#fff" font-family="Inter, Arial, sans-serif" font-size="11" font-weight="700">Compare together</text>
+  </g>
+</svg>
