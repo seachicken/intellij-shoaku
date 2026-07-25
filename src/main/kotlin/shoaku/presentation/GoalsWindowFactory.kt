@@ -504,6 +504,7 @@ private fun SessionTaskPane(
     val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
     val activeItem = todoItems.getOrNull(activeItemIndex)
     val messages = session.messages.orEmpty()
+    val hasConversationHistory = remember(messages) { messages.any(::isVisibleChatMessage) }
     val alignmentState = remember(messages) { alignmentDisplayState(messages) }
     val compactConversation = remember(messages) { compactConversationMessages(messages) }
     val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
@@ -524,6 +525,7 @@ private fun SessionTaskPane(
     val taskCheckState = remember(session.shoakuId, activeItemIndex, activeItem?.content) {
         FinalCheckDisplayState()
     }
+    val replyState = remember(session.shoakuId) { ReplyDisplayState() }
     val taskCheckMessage = remember(messages, taskCheckState.startMessageCount.value) {
         taskCheckState.startMessageCount.value?.let { startMessageCount ->
             finalCheckResponse(messages.drop(startMessageCount))
@@ -533,6 +535,7 @@ private fun SessionTaskPane(
     val finalCheckThinking = finalCheckState.thinking.value
     val taskCheckRequested = taskCheckState.requested.value
     val taskCheckThinking = taskCheckState.thinking.value
+    val replyThinking = replyState.thinking.value
     val displayedConversation = remember(compactConversation, taskCheckMessage, finalCheckMessage) {
         conversationWithoutCheckResult(
             conversationWithoutCheckResult(compactConversation, taskCheckMessage),
@@ -561,7 +564,15 @@ private fun SessionTaskPane(
         )
         else -> finalCheckMessage
     }
-    val interactionResponse = finalCheckDisplayMessage ?: preferredCurrentTaskResponse
+    val interactionResponse = finalCheckDisplayMessage
+        ?: taskCheckDisplayMessage
+        ?: replyThinking.takeIf { it }?.let {
+            Message(
+                type = "agentMessage",
+                text = ThinkingMessage
+            )
+        }
+        ?: preferredCurrentTaskResponse
     val isFinalCheckResponse = finalCheckDisplayMessage != null
 
     LaunchedEffect(messages.size, finalCheckMessage, taskCheckMessage) {
@@ -570,6 +581,11 @@ private fun SessionTaskPane(
         }
         if (taskCheckMessage != null) {
             taskCheckState.thinking.value = false
+        }
+        replyState.startMessageCount.value?.let { startMessageCount ->
+            if (messages.drop(startMessageCount).any { it.type == "agentMessage" }) {
+                replyState.thinking.value = false
+            }
         }
     }
     val comparableResponseText = remember(taskResponse) {
@@ -640,7 +656,7 @@ private fun SessionTaskPane(
                 .fillMaxWidth()
                 .onGloballyPositioned { tasksViewportTop = it.boundsInWindow().top }
         ) {
-            ScrollHintLazyColumn(
+            LazyColumn(
                 state = outerListState,
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -702,6 +718,7 @@ private fun SessionTaskPane(
                                         )
                                     }
                                 },
+                                replyThinking = replyThinking,
                                 expanded = conversationExpanded,
                                 onExpandedChange = onConversationExpandedChange,
                                 onHeaderPositioned = { conversationHeaderTop = it },
@@ -714,6 +731,8 @@ private fun SessionTaskPane(
                                     "Ask Shoaku"
                                 },
                                 onSend = {
+                                    replyState.thinking.value = true
+                                    replyState.startMessageCount.value = messages.size
                                     sendSessionReply(
                                         project = project,
                                         shoakuId = session.shoakuId,
@@ -784,7 +803,7 @@ private fun SessionTaskPane(
             ) {
                 AnimatedVisibility(
                     visible =
-                        conversationExpanded &&
+                        hasConversationHistory &&
                             conversationHeaderTop < tasksViewportTop - stickyHeaderThreshold,
                     enter = fadeIn(animationSpec = tween(120)) +
                         slideInVertically(
@@ -798,7 +817,7 @@ private fun SessionTaskPane(
                         )
                 ) {
                     ConversationHistoryHeader(
-                        expanded = true,
+                        expanded = conversationExpanded,
                         onExpandedChange = onConversationExpandedChange,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -820,6 +839,11 @@ private const val NoFinalCheckIssuesMessage = "No issues found."
 
 private class FinalCheckDisplayState {
     val requested = mutableStateOf(false)
+    val thinking = mutableStateOf(false)
+    val startMessageCount = mutableStateOf<Int?>(null)
+}
+
+private class ReplyDisplayState {
     val thinking = mutableStateOf(false)
     val startMessageCount = mutableStateOf<Int?>(null)
 }
@@ -1262,6 +1286,7 @@ private fun ConversationComposerNode(
     selectedReviewLocation: ReviewLocation?,
     onResponseLinkClick: ((String) -> Unit)?,
     onReviewCommentClick: ((ReviewComment) -> Unit)?,
+    replyThinking: Boolean,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onHeaderPositioned: (Float) -> Unit,
@@ -1278,9 +1303,10 @@ private fun ConversationComposerNode(
             isVisibleChatMessage(message)
         }
     }
-    LaunchedEffect(expanded, visibleMessages.size) {
-        if (expanded && visibleMessages.isNotEmpty()) {
-            historyListState.scrollToItem(visibleMessages.lastIndex)
+    val historyItemCount = visibleMessages.size + if (replyThinking) 1 else 0
+    LaunchedEffect(expanded, historyItemCount) {
+        if (expanded && historyItemCount > 0) {
+            historyListState.scrollToItem(historyItemCount - 1)
         }
     }
     val nodeShape = RoundedCornerShape(7.dp)
@@ -1334,8 +1360,8 @@ private fun ConversationComposerNode(
                 }
             }
         }
-        if (expanded && visibleMessages.isNotEmpty()) {
-            LazyColumn(
+        if (expanded && historyItemCount > 0) {
+            ScrollHintLazyColumn(
                 state = historyListState,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1348,6 +1374,15 @@ private fun ConversationComposerNode(
                         index = index,
                         entry = entry
                     )
+                }
+                if (replyThinking) {
+                    item {
+                        ChatEntryRow(
+                            entry = Message(type = "agentMessage", text = ThinkingMessage),
+                            showTurnDivider = false,
+                            topSpacing = if (visibleMessages.isEmpty()) 4.dp else 8.dp
+                        )
+                    }
                 }
             }
         }
@@ -2828,8 +2863,7 @@ private fun TodoRow(
                     text = title,
                     fontSize = 14.sp,
                     fontWeight = if (state == TaskItemState.Current) FontWeight.SemiBold else FontWeight.Normal,
-                    color = TodoColors.taskItemTitle(state, enabled),
-                    textDecoration = if (state == TaskItemState.Completed) TextDecoration.LineThrough else TextDecoration.None
+                    color = TodoColors.taskItemTitle(state, enabled)
                 )
                 subtitle?.let {
                     Text(
