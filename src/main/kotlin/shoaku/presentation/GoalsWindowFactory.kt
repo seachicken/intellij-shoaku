@@ -28,6 +28,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.*
 import androidx.compose.ui.text.font.FontFamily
@@ -592,6 +594,10 @@ private fun SessionTaskPane(
         }
     }
 
+    val outerListState = rememberLazyListState()
+    var tasksViewportTop by remember { mutableStateOf(Float.NEGATIVE_INFINITY) }
+    var conversationHeaderTop by remember { mutableStateOf(Float.POSITIVE_INFINITY) }
+    val stickyHeaderThreshold = with(LocalDensity.current) { 2.dp.toPx() }
     Column(
         modifier = modifier
             .background(TodoColors.sectionSurface, RoundedCornerShape(8.dp))
@@ -620,8 +626,6 @@ private fun SessionTaskPane(
                 )
             }
         )
-        val outerListState = rememberLazyListState()
-
         LaunchedEffect(todoItems, activeItemIndex) {
             if (todoItems.isEmpty()) {
                 return@LaunchedEffect
@@ -630,16 +634,20 @@ private fun SessionTaskPane(
             outerListState.animateScrollToItem(targetIndex)
         }
 
-        ScrollHintLazyColumn(
-            state = outerListState,
+        Box(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = 4.dp)
+                .fillMaxWidth()
+                .onGloballyPositioned { tasksViewportTop = it.boundsInWindow().top }
         ) {
-            item {
-                TaskListCard(
+            ScrollHintLazyColumn(
+                state = outerListState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = 4.dp)
+            ) {
+                item {
+                    TaskListCard(
                     todoItems = todoItems,
                     activeItemIndex = activeItemIndex,
                     currentTaskActionLabel = "Review",
@@ -696,6 +704,7 @@ private fun SessionTaskPane(
                                 },
                                 expanded = conversationExpanded,
                                 onExpandedChange = onConversationExpandedChange,
+                                onHeaderPositioned = { conversationHeaderTop = it },
                                 instructionValue = instructionValue,
                                 onInstructionValueChange = onInstructionValueChange,
                                 enabled = session.shoakuId != null,
@@ -736,35 +745,67 @@ private fun SessionTaskPane(
                             server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
                         }
                     }
-                )
-            }
-            if (diffResponse?.response?.isNotBlank() == true) {
-                item {
-                    InfoCard(
-                        title = "Suggested summary",
-                        modifier = Modifier.fillMaxWidth(),
-                        action = {
-                            OutlinedButton(
-                                onClick = {
-                                    project?.let {
-                                        project.sendNotificationToShoakuServer { server ->
-                                            server.applyDiff(
-                                                ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
-                                            )
+                    )
+                }
+                if (diffResponse?.response?.isNotBlank() == true) {
+                    item {
+                        InfoCard(
+                            title = "Suggested summary",
+                            modifier = Modifier.fillMaxWidth(),
+                            action = {
+                                OutlinedButton(
+                                    onClick = {
+                                        project?.let {
+                                            project.sendNotificationToShoakuServer { server ->
+                                                server.applyDiff(
+                                                    ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
+                                                )
+                                            }
                                         }
-                                    }
-                                    session.shoakuId?.let { shoakuId ->
-                                        viewModel.diffResponses.remove(shoakuId)
-                                    }
-                                },
-                                enabled = filePath.isNotBlank()
-                            ) {
-                                Text("Apply")
+                                        session.shoakuId?.let { shoakuId ->
+                                            viewModel.diffResponses.remove(shoakuId)
+                                        }
+                                    },
+                                    enabled = filePath.isNotBlank()
+                                ) {
+                                    Text("Apply")
+                                }
                             }
+                        ) {
+                            Text(diffResponse.diff, color = TodoColors.infoText)
                         }
-                    ) {
-                        Text(diffResponse.diff, color = TodoColors.infoText)
                     }
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+            ) {
+                AnimatedVisibility(
+                    visible =
+                        conversationExpanded &&
+                            conversationHeaderTop < tasksViewportTop - stickyHeaderThreshold,
+                    enter = fadeIn(animationSpec = tween(120)) +
+                        slideInVertically(
+                            animationSpec = tween(160, easing = FastOutSlowInEasing),
+                            initialOffsetY = { -it / 3 }
+                        ),
+                    exit = fadeOut(animationSpec = tween(90)) +
+                        slideOutVertically(
+                            animationSpec = tween(120, easing = FastOutSlowInEasing),
+                            targetOffsetY = { -it / 3 }
+                        )
+                ) {
+                    ConversationHistoryHeader(
+                        expanded = true,
+                        onExpandedChange = onConversationExpandedChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(TodoColors.taskResponseSurface)
+                            .padding(horizontal = 10.dp, vertical = 9.dp)
+                    )
                 }
             }
         }
@@ -1176,6 +1217,43 @@ private fun ReviewCommentRow(
 }
 
 @Composable
+private fun ConversationHistoryHeader(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String = "Conversation",
+    showToggle: Boolean = true
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (label.isNotBlank()) {
+            Text(
+                text = label,
+                color = TodoColors.taskResponseLabelText,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        } else {
+            Spacer(modifier = Modifier.weight(1f))
+        }
+        if (showToggle) {
+            Text(
+                text = if (expanded) "Hide history" else "Show history",
+                color = TodoColors.linkText,
+                fontSize = 11.sp,
+                modifier = Modifier.clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) { onExpandedChange(!expanded) }
+            )
+        }
+    }
+}
+
+@Composable
 private fun ConversationComposerNode(
     messages: List<Message>,
     response: TaskResponseDisplay?,
@@ -1186,6 +1264,7 @@ private fun ConversationComposerNode(
     onReviewCommentClick: ((ReviewComment) -> Unit)?,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    onHeaderPositioned: (Float) -> Unit,
     instructionValue: TextFieldValue,
     onInstructionValueChange: (TextFieldValue) -> Unit,
     enabled: Boolean,
@@ -1213,40 +1292,15 @@ private fun ConversationComposerNode(
             .padding(horizontal = 10.dp, vertical = 9.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val visibleLabel = if (expanded) {
-                "Conversation"
-            } else if (response != null) {
-                responseLabel
-            } else {
-                "Conversation"
-            }
-            if (visibleLabel.isNotBlank()) {
-                Text(
-                    text = visibleLabel,
-                    color = TodoColors.taskResponseLabelText,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            } else {
-                Spacer(modifier = Modifier.weight(1f))
-            }
-            if (visibleMessages.isNotEmpty()) {
-                Text(
-                    text = if (expanded) "Hide history" else "Show history",
-                    color = TodoColors.linkText,
-                    fontSize = 11.sp,
-                    modifier = Modifier.clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) { onExpandedChange(!expanded) }
-                )
-            }
-        }
+        ConversationHistoryHeader(
+            expanded = expanded,
+            onExpandedChange = onExpandedChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { onHeaderPositioned(it.boundsInWindow().top) },
+            label = if (!expanded && response != null) responseLabel else "Conversation",
+            showToggle = visibleMessages.isNotEmpty()
+        )
         response?.takeUnless { expanded }?.let { currentResponse ->
             if (currentResponse.kind == TaskResponseKind.Status && reviewComments.isEmpty()) {
                 Text(
