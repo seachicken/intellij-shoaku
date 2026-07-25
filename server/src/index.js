@@ -526,7 +526,7 @@ process.stdin.on('data', async (chunk) => {
                     description: [
                       'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
                     ].join('\n'),
-                    type: 'integer'
+                    type: 'number'
                   }
                 },
                 required: [ 'text', 'alignmentScore' ],
@@ -604,7 +604,7 @@ process.stdin.on('data', async (chunk) => {
                     description: [
                       'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
                     ].join('\n'),
-                    type: 'integer'
+                    type: 'number'
                   }
                 },
                 required: [ 'text', 'alignmentScore' ],
@@ -621,7 +621,7 @@ process.stdin.on('data', async (chunk) => {
                   const message = appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
                   await syncShoakuLists(initializeParams.initializationOptions.filePath);
 
-                  if (response.alignmentScore > 0.9) {
+                  if (response.alignmentScore >= 0.9) {
                     startTurn({
                       threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
                       input: [
@@ -742,7 +742,7 @@ process.stdin.on('data', async (chunk) => {
                         type: 'string'
                       },
                       line: {
-                        type: 'integer'
+                        type: 'number'
                       },
                       text: {
                         type: 'string'

@@ -18,7 +18,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
@@ -51,17 +50,16 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Splitter
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.ui.JBColor
-import com.intellij.ui.OnePixelSplitter
 import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
+import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.*
 import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icon.PathIconKey
@@ -82,12 +80,9 @@ import shoaku.ShowDiffParams
 import shoaku.StartFinalCheckParams
 import shoaku.StartSessionParams
 import shoaku.TokenUsageUi
-import java.awt.Dimension
-import java.beans.PropertyChangeListener
 import java.text.NumberFormat
 import java.util.*
 import kotlin.collections.first
-import kotlin.math.abs
 
 class GoalsWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
@@ -141,8 +136,8 @@ private fun MyToolWindowContent(
     val vm = remember { viewModel }
     val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
     var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
-    var detailTodoPaneFraction by remember { mutableStateOf(0.72f) }
-    var detailChatCollapsed by remember { mutableStateOf(true) }
+    val instructionValues = remember { mutableStateMapOf<SessionKey, TextFieldValue>() }
+    val expandedConversationKeys = remember { mutableStateMapOf<SessionKey, Boolean>() }
     val goals = vm.items.filter { it.shoakuId != null }
     val goalFilter = vm.goalFilter
     val openSessions = openSessionKeys.mapNotNull { key -> goals.firstOrNull { it.sessionKey == key } }
@@ -154,6 +149,8 @@ private fun MyToolWindowContent(
         if (selectedSessionKey != null && selectedSessionKey !in currentKeys) {
             selectedSessionKey = null
         }
+        instructionValues.keys.retainAll(currentKeys)
+        expandedConversationKeys.keys.retainAll(currentKeys)
     }
 
     Column(
@@ -181,7 +178,7 @@ private fun MyToolWindowContent(
                 filter = goalFilter,
                 filePathState = filePathState,
                 project = project,
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                 onFilterChange = { vm.goalFilter = it },
                 onOpenSession = { session ->
                     if (session.shoakuId == null) {
@@ -205,11 +202,11 @@ private fun MyToolWindowContent(
                 filePath = state.filePath,
                 viewModel = vm,
                 project = project,
-                todoPaneFraction = detailTodoPaneFraction,
-                onTodoPaneFractionChange = { detailTodoPaneFraction = it },
-                chatCollapsed = detailChatCollapsed,
-                onChatCollapsedChange = { detailChatCollapsed = it },
-                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)
+                instructionValue = instructionValues[selectedSession.sessionKey] ?: TextFieldValue(),
+                onInstructionValueChange = { instructionValues[selectedSession.sessionKey] = it },
+                conversationExpanded = expandedConversationKeys[selectedSession.sessionKey] == true,
+                onConversationExpandedChange = { expandedConversationKeys[selectedSession.sessionKey] = it },
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)
             )
         }
     }
@@ -350,7 +347,9 @@ private fun SessionListContent(
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = TodoMetrics.horizontalPadding)
         ) {
             Text("Goals file:")
             TextField(
@@ -410,21 +409,35 @@ private fun SessionListContent(
 
         ScrollHintLazyColumn(
             state = listState,
-            modifier = modifier,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(
+                    start = TodoMetrics.horizontalPadding,
+                    top = 8.dp,
+                    end = TodoMetrics.horizontalPadding
+                ),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            itemsIndexed(filteredGoals) { _, session ->
+            itemsIndexed(filteredGoals) { index, session ->
                 val todoItems = session.children.filter { it.checked != null }
+                val state = when {
+                    session.checked == true -> TaskItemState.Completed
+                    index == activeSessionIndex -> TaskItemState.Current
+                    else -> TaskItemState.Pending
+                }
                 TodoRow(
                     title = session.content,
                     subtitle = "${todoItems.size} tasks",
                     meta = null,
-                    completed = session.checked ?: false,
-                    compact = true,
+                    state = state,
                     hoverable = true,
                     onClick = if (session.shoakuId != null) ({ onOpenSession(session) }) else null,
                     trailing = {
-                        session.status?.toSummaryStatusState()?.takeIf { it.tone != AgentStatusTone.Hidden }?.let { status ->
+                        val status = session.status
+                            ?.toSummaryStatusState()
+                            ?.takeIf { it.tone != AgentStatusTone.Hidden }
+                        if (status != null) {
                             StatusPill(
                                 label = status.label,
                                 tone = status.tone,
@@ -445,126 +458,26 @@ private fun SessionDetailContent(
     filePath: String,
     viewModel: ShoakuViewModel,
     project: Project? = null,
-    todoPaneFraction: Float,
-    onTodoPaneFractionChange: (Float) -> Unit,
-    chatCollapsed: Boolean,
-    onChatCollapsedChange: (Boolean) -> Unit,
+    instructionValue: TextFieldValue,
+    onInstructionValueChange: (TextFieldValue) -> Unit,
+    conversationExpanded: Boolean,
+    onConversationExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val diffResponse = session.shoakuId?.let { viewModel.diffResponses[it] }
     val finalCheckState = remember(session.shoakuId) { FinalCheckDisplayState() }
-    if (chatCollapsed) {
-        Column(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            SessionTaskPane(
-                session = session,
-                diffResponse = diffResponse,
-                filePath = filePath,
-                viewModel = viewModel,
-                project = project,
-                finalCheckState = finalCheckState,
-                modifier = Modifier.weight(1f).fillMaxWidth()
-            )
-            CollapsedChatBar(
-                session = session,
-                viewModel = viewModel,
-                onExpand = { onChatCollapsedChange(false) },
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    } else {
-        SessionDetailSplitter(
-            session = session,
-            diffResponse = diffResponse,
-            filePath = filePath,
-            viewModel = viewModel,
-            project = project,
-            finalCheckState = finalCheckState,
-            todoPaneFraction = todoPaneFraction,
-            onTodoPaneFractionChange = onTodoPaneFractionChange,
-            onCollapseChat = { onChatCollapsedChange(true) },
-            modifier = modifier
-        )
-    }
-}
-
-@Composable
-private fun SessionDetailSplitter(
-    session: Item,
-    diffResponse: ShowDiffParams?,
-    filePath: String,
-    viewModel: ShoakuViewModel,
-    project: Project?,
-    finalCheckState: FinalCheckDisplayState,
-    todoPaneFraction: Float,
-    onTodoPaneFractionChange: (Float) -> Unit,
-    onCollapseChat: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val sessionState = rememberUpdatedState(session)
-    val diffResponseState = rememberUpdatedState(diffResponse)
-    val filePathState = rememberUpdatedState(filePath)
-    val viewModelState = rememberUpdatedState(viewModel)
-    val projectState = rememberUpdatedState(project)
-    val finalCheckStateState = rememberUpdatedState(finalCheckState)
-    val splitter = remember {
-        OnePixelSplitter(true, todoPaneFraction, 0.2f, 0.92f).apply {
-            dividerWidth = JBUI.scale(5)
-            divider.background = java.awt.Color(0, 0, 0, 0)
-            setHonorComponentsMinimumSize(true)
-            dividerPositionStrategy = Splitter.DividerPositionStrategy.KEEP_FIRST_SIZE
-            lackOfSpaceStrategy = Splitter.LackOfSpaceStrategy.HONOR_THE_FIRST_MIN_SIZE
-            isShowDividerControls = false
-            isShowDividerIcon = false
-            firstComponent = JewelComposePanel {
-                SessionTaskPane(
-                    session = sessionState.value,
-                    diffResponse = diffResponseState.value,
-                    filePath = filePathState.value,
-                    viewModel = viewModelState.value,
-                    project = projectState.value,
-                    finalCheckState = finalCheckStateState.value
-                )
-            }.apply {
-                minimumSize = Dimension(0, JBUI.scale(120))
-            }
-            secondComponent = JewelComposePanel {
-                SessionChatPane(
-                    session = sessionState.value,
-                    viewModel = viewModelState.value,
-                    project = projectState.value,
-                    onCollapse = onCollapseChat
-                )
-            }.apply {
-                minimumSize = Dimension(0, JBUI.scale(220))
-            }
-        }
-    }
-
-    DisposableEffect(splitter, onTodoPaneFractionChange) {
-        val listener = PropertyChangeListener { event ->
-            if (event.propertyName == Splitter.PROP_PROPORTION) {
-                onTodoPaneFractionChange(splitter.proportion)
-            }
-        }
-        splitter.addPropertyChangeListener(listener)
-        onDispose {
-            splitter.removePropertyChangeListener(listener)
-        }
-    }
-
-    SideEffect {
-        if (abs(splitter.proportion - todoPaneFraction) > 0.001f) {
-            splitter.proportion = todoPaneFraction
-        }
-    }
-
-    SwingPanel(
-        factory = { splitter },
-        modifier = modifier,
-        update = {}
+    SessionTaskPane(
+        session = session,
+        diffResponse = diffResponse,
+        filePath = filePath,
+        viewModel = viewModel,
+        project = project,
+        finalCheckState = finalCheckState,
+        instructionValue = instructionValue,
+        onInstructionValueChange = onInstructionValueChange,
+        conversationExpanded = conversationExpanded,
+        onConversationExpandedChange = onConversationExpandedChange,
+        modifier = modifier
     )
 }
 
@@ -576,6 +489,10 @@ private fun SessionTaskPane(
     viewModel: ShoakuViewModel,
     project: Project?,
     finalCheckState: FinalCheckDisplayState,
+    instructionValue: TextFieldValue,
+    onInstructionValueChange: (TextFieldValue) -> Unit,
+    conversationExpanded: Boolean,
+    onConversationExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val todoItems = session.children.filter { it.checked != null }
@@ -583,23 +500,78 @@ private fun SessionTaskPane(
     val isChecklistComplete = todoItems.isNotEmpty() && remainingCount == 0
     val isFinalCheckActive = isChecklistComplete
     val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
+    val activeItem = todoItems.getOrNull(activeItemIndex)
     val messages = session.messages.orEmpty()
-    val taskResponse = remember(messages) { taskResponseDisplay(messages) }
+    val alignmentState = remember(messages) { alignmentDisplayState(messages) }
+    val compactConversation = remember(messages) { compactConversationMessages(messages) }
+    val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
+        val base = session.tokenUsage ?: return@remember null
+        val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
+        base.copy(maxTokens = overrideMax.coerceAtLeast(1))
+    }
+    val taskResponse = remember(alignmentState) {
+        (alignmentState as? AlignmentDisplayState.NeedsInput)?.let {
+            TaskResponseDisplay(text = it.message, kind = TaskResponseKind.Clarification)
+        }
+    }
     val finalCheckMessage = remember(messages, finalCheckState.startMessageCount.value) {
         finalCheckState.startMessageCount.value?.let { startMessageCount ->
             finalCheckResponse(messages.drop(startMessageCount))
         }
     }
+    val taskCheckState = remember(session.shoakuId, activeItemIndex, activeItem?.content) {
+        FinalCheckDisplayState()
+    }
+    val taskCheckMessage = remember(messages, taskCheckState.startMessageCount.value) {
+        taskCheckState.startMessageCount.value?.let { startMessageCount ->
+            finalCheckResponse(messages.drop(startMessageCount))
+        }
+    }
     val finalCheckRequested = finalCheckState.requested.value
     val finalCheckThinking = finalCheckState.thinking.value
+    val taskCheckRequested = taskCheckState.requested.value
+    val taskCheckThinking = taskCheckState.thinking.value
+    val displayedConversation = remember(compactConversation, taskCheckMessage, finalCheckMessage) {
+        conversationWithoutCheckResult(
+            conversationWithoutCheckResult(compactConversation, taskCheckMessage),
+            finalCheckMessage
+        )
+    }
+    val taskCheckDisplayMessage = when {
+        taskCheckThinking -> Message(
+            type = "agentMessage",
+            phase = "task_check",
+            text = ThinkingMessage
+        )
+        taskCheckRequested -> taskCheckMessage
+        else -> null
+    }
+    val preferredCurrentTaskResponse = remember(displayedConversation, taskCheckDisplayMessage) {
+        preferredTaskResponse(displayedConversation, taskCheckDisplayMessage)
+    }
+    val isTaskCheckResponse = taskCheckDisplayMessage != null
+    val finalCheckDisplayMessage = when {
+        !isFinalCheckActive || !finalCheckRequested -> null
+        finalCheckThinking -> Message(
+            type = "agentMessage",
+            phase = "final_check",
+            text = ThinkingMessage
+        )
+        else -> finalCheckMessage
+    }
+    val interactionResponse = finalCheckDisplayMessage ?: preferredCurrentTaskResponse
+    val isFinalCheckResponse = finalCheckDisplayMessage != null
 
-    LaunchedEffect(messages.size, finalCheckMessage) {
+    LaunchedEffect(messages.size, finalCheckMessage, taskCheckMessage) {
         if (finalCheckMessage != null) {
             finalCheckState.thinking.value = false
         }
+        if (taskCheckMessage != null) {
+            taskCheckState.thinking.value = false
+        }
     }
     val comparableResponseText = remember(taskResponse) {
-        taskResponse?.takeUnless { it.isThinking || it.isFixedMessage }
+        taskResponse?.takeIf { it.kind == TaskResponseKind.Clarification }
             ?.text
             ?.trim()
             ?.takeIf { it.isNotBlank() }
@@ -630,9 +602,21 @@ private fun SessionTaskPane(
             title = "Tasks",
             trailing = {
                 Text(
-                    text = "$remainingCount left",
+                    text = "$remainingCount remaining",
                     fontSize = 11.sp,
                     color = TodoColors.secondaryText
+                )
+                TokenUsageIndicator(
+                    tokenUsage = effectiveTokenUsage,
+                    status = session.status,
+                    onIncreaseBudget = {
+                        val shoakuId = session.shoakuId ?: return@TokenUsageIndicator
+                        val currentMax = effectiveTokenUsage?.maxTokens
+                            ?: session.tokenUsage?.maxTokens
+                            ?: return@TokenUsageIndicator
+                        val increment = (currentMax / 10f).toInt().coerceAtLeast(1)
+                        viewModel.tokenBudgetOverrides[shoakuId] = currentMax + increment
+                    }
                 )
             }
         )
@@ -658,10 +642,81 @@ private fun SessionTaskPane(
                 TaskListCard(
                     todoItems = todoItems,
                     activeItemIndex = activeItemIndex,
-                    response = taskResponse?.takeUnless { isFinalCheckActive },
+                    currentTaskActionLabel = "Review",
+                    currentTaskActionEnabled =
+                        session.shoakuId != null &&
+                            !taskCheckThinking &&
+                            session.status?.navigator?.equals("active", ignoreCase = true) != true,
+                    onCurrentTaskActionClick = {
+                        taskCheckState.requested.value = true
+                        taskCheckState.thinking.value = true
+                        taskCheckState.startMessageCount.value = messages.size
+                        project?.sendNotificationToShoakuServer { server ->
+                            server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
+                        }
+                    },
+                    currentTaskContent = {
+                        TaskTimelineNode {
+                            ConversationComposerNode(
+                                messages = messages,
+                                response = interactionResponse?.let {
+                                    TaskResponseDisplay(
+                                        text = it.text?.takeIf(String::isNotBlank)
+                                            ?: NoFinalCheckIssuesMessage,
+                                        kind = when {
+                                            isTaskCheckResponse || isFinalCheckResponse -> TaskResponseKind.Detail
+                                            alignmentState is AlignmentDisplayState.NeedsInput ->
+                                                TaskResponseKind.Clarification
+                                            else -> TaskResponseKind.Detail
+                                        }
+                                    )
+                                },
+                                responseLabel = "Conversation",
+                                reviewComments = interactionResponse?.inlineReviewComments.orEmpty(),
+                                selectedReviewLocation = viewModel.selectedReviewLocation,
+                                onResponseLinkClick = { link ->
+                                    project?.let {
+                                        openReviewDiff(
+                                            it,
+                                            session.temporaryWorkspace,
+                                            link,
+                                            interactionResponse?.inlineReviewComments.orEmpty()
+                                        )
+                                    }
+                                },
+                                onReviewCommentClick = { comment ->
+                                    project?.let {
+                                        openReviewDiff(
+                                            it,
+                                            session.temporaryWorkspace,
+                                            "shoaku-review://${comment.path}#L${comment.line}",
+                                            interactionResponse?.inlineReviewComments.orEmpty()
+                                        )
+                                    }
+                                },
+                                expanded = conversationExpanded,
+                                onExpandedChange = onConversationExpandedChange,
+                                instructionValue = instructionValue,
+                                onInstructionValueChange = onInstructionValueChange,
+                                enabled = session.shoakuId != null,
+                                placeholder = if (alignmentState is AlignmentDisplayState.NeedsInput) {
+                                    "Reply to Shoaku"
+                                } else {
+                                    "Ask Shoaku"
+                                },
+                                onSend = {
+                                    sendSessionReply(
+                                        project = project,
+                                        shoakuId = session.shoakuId,
+                                        instruction = instructionValue.text
+                                    )
+                                    onInstructionValueChange(TextFieldValue())
+                                }
+                            )
+                        }
+                    },
                     reviewEnabled = isChecklistComplete,
                     finalCheckActive = isFinalCheckActive,
-                    selectedReviewLocation = viewModel.selectedReviewLocation,
                     reviewResponse = if (!isFinalCheckActive || !finalCheckRequested) {
                         null
                     } else if (finalCheckThinking) {
@@ -672,11 +727,6 @@ private fun SessionTaskPane(
                         )
                     } else {
                         finalCheckMessage
-                    },
-                    onReviewLinkClick = { link, comments ->
-                        project?.let {
-                            openReviewDiff(it, session.temporaryWorkspace, link, comments)
-                        }
                     },
                     onReviewClick = {
                         finalCheckState.requested.value = true
@@ -722,7 +772,7 @@ private fun SessionTaskPane(
 }
 
 private const val AlignmentGapMessageThreshold = 0.9
-private const val AlignmentGapReassuringMessage = "Aligned with goal"
+private const val AlignmentFallbackMessage = "Clarify the task direction below."
 private const val ThinkingMessage = "Thinking"
 private const val ReviewTaskTitle = "Final Check"
 private const val NoFinalCheckIssuesMessage = "No issues found."
@@ -735,27 +785,44 @@ private class FinalCheckDisplayState {
 
 private data class TaskResponseDisplay(
     val text: String,
-    val isThinking: Boolean = false,
-    val isFixedMessage: Boolean = false
+    val kind: TaskResponseKind = TaskResponseKind.Detail
 )
 
-private enum class TodoRowEmphasis {
-    Default,
+private enum class TaskResponseKind {
+    Clarification,
+    Status,
+    Detail
+}
+
+internal sealed interface AlignmentDisplayState {
+    data object Unavailable : AlignmentDisplayState
+    data object Checking : AlignmentDisplayState
+    data object InSync : AlignmentDisplayState
+    data class NeedsInput(val message: String) : AlignmentDisplayState
+}
+
+private enum class TaskItemState {
+    Pending,
     Current,
-    MutedPending,
     Completed
+}
+
+private enum class TaskRowKind {
+    Task,
+    FinalCheck
 }
 
 @Composable
 private fun TaskListCard(
     todoItems: List<Item>,
     activeItemIndex: Int,
-    response: TaskResponseDisplay?,
+    currentTaskActionLabel: String,
+    currentTaskActionEnabled: Boolean,
+    onCurrentTaskActionClick: () -> Unit,
+    currentTaskContent: @Composable ColumnScope.() -> Unit,
     reviewEnabled: Boolean,
     finalCheckActive: Boolean,
-    selectedReviewLocation: ReviewLocation?,
     reviewResponse: Message?,
-    onReviewLinkClick: (String, List<ReviewComment>) -> Unit,
     onReviewClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -766,73 +833,56 @@ private fun TaskListCard(
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         if (todoItems.isEmpty()) {
-            Text(
-                text = "No tasks yet.",
-                color = TodoColors.secondaryText,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(vertical = 12.dp)
-            )
+            Column(
+                modifier = Modifier.padding(vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "No tasks added to this goal.",
+                    color = TodoColors.secondaryText,
+                    style = JewelTheme.defaultTextStyle
+                )
+                Text(
+                    text = "Add checklist items in the goals file.",
+                    color = TodoColors.disabledText,
+                    style = JewelTheme.defaultTextStyle
+                )
+            }
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             todoItems.forEachIndexed { index, model ->
-                when {
-                    index == activeItemIndex -> CurrentTaskGroup(
-                        title = model.content,
-                        response = response
-                    )
-                    model.checked == true -> TodoRow(
-                        title = model.content,
-                        subtitle = null,
-                        meta = null,
-                        completed = true,
-                        compact = true,
-                        emphasis = TodoRowEmphasis.MutedPending
-                    )
-                    else -> TodoRow(
-                        title = model.content,
-                        subtitle = null,
-                        meta = null,
-                        completed = false,
-                        compact = true,
-                        emphasis = TodoRowEmphasis.MutedPending
-                    )
+                val state = when {
+                    index == activeItemIndex -> TaskItemState.Current
+                    model.checked == true -> TaskItemState.Completed
+                    else -> TaskItemState.Pending
                 }
+                TaskListRow(
+                    title = model.content,
+                    state = state,
+                    actionLabel = currentTaskActionLabel.takeIf { state == TaskItemState.Current },
+                    onActionClick = onCurrentTaskActionClick.takeIf { state == TaskItemState.Current },
+                    actionEnabled = currentTaskActionEnabled,
+                    attachedContent = currentTaskContent.takeIf { state == TaskItemState.Current }
+                )
             }
             if (finalCheckActive) {
-                CurrentTaskGroup(
+                TaskListRow(
                     title = ReviewTaskTitle,
-                    response = reviewResponse?.let {
-                        TaskResponseDisplay(
-                            text = it.text?.takeIf(String::isNotBlank) ?: NoFinalCheckIssuesMessage,
-                            isThinking = it.text == ThinkingMessage,
-                            isFixedMessage = it.text.isNullOrBlank()
-                        )
-                    },
-                    onReviewLinkClick = { link ->
-                        onReviewLinkClick(link, reviewResponse?.inlineReviewComments.orEmpty())
-                    },
-                    reviewComments = reviewResponse?.inlineReviewComments.orEmpty(),
-                    selectedReviewLocation = selectedReviewLocation,
-                    onReviewCommentClick = { comment ->
-                        onReviewLinkClick(
-                            "shoaku-review://${comment.path}#L${comment.line}",
-                            reviewResponse?.inlineReviewComments.orEmpty()
-                        )
-                    },
+                    state = TaskItemState.Current,
+                    kind = TaskRowKind.FinalCheck,
                     enabled = reviewEnabled,
-                    buttonStyle = true,
-                    onClick = if (reviewEnabled) onReviewClick else null,
+                    actionLabel = "Review",
+                    onActionClick = onReviewClick,
+                    actionEnabled = reviewResponse?.text != ThinkingMessage,
+                    attachedContent = currentTaskContent,
                 )
             } else {
-                TodoRow(
+                TaskListRow(
                     title = ReviewTaskTitle,
-                    subtitle = null,
-                    meta = null,
-                    completed = false,
-                    compact = true,
-                    emphasis = TodoRowEmphasis.MutedPending,
+                    state = TaskItemState.Pending,
+                    kind = TaskRowKind.FinalCheck,
                     enabled = false,
-                    buttonStyle = true
+                    attachedContent = currentTaskContent.takeIf { todoItems.isEmpty() }
                 )
             }
         }
@@ -840,57 +890,139 @@ private fun TaskListCard(
 }
 
 @Composable
-private fun CurrentTaskGroup(
+private fun TaskListRow(
     title: String,
-    response: TaskResponseDisplay?,
+    state: TaskItemState,
+    kind: TaskRowKind = TaskRowKind.Task,
+    response: TaskResponseDisplay? = null,
     onReviewLinkClick: ((String) -> Unit)? = null,
     reviewComments: List<ReviewComment> = emptyList(),
     selectedReviewLocation: ReviewLocation? = null,
     onReviewCommentClick: ((ReviewComment) -> Unit)? = null,
-    onClick: (() -> Unit)? = null,
+    actionLabel: String? = null,
+    onActionClick: (() -> Unit)? = null,
+    actionEnabled: Boolean = true,
+    attachedContent: (@Composable ColumnScope.() -> Unit)? = null,
     enabled: Boolean = true,
-    buttonStyle: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val hasMessage = response != null
-    Box(
-        modifier = modifier.fillMaxWidth()
+    val isActiveGroup = state == TaskItemState.Current
+    val activeGroupShape = RoundedCornerShape(8.dp)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(bottom = if (isActiveGroup) 8.dp else 0.dp)
+            .then(
+                if (isActiveGroup) {
+                    Modifier
+                        .clip(activeGroupShape)
+                        .background(TodoColors.activeTaskGroupSurface)
+                } else {
+                    Modifier
+                }
+            ),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .width(2.dp)
-                .padding(vertical = 6.dp)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(999.dp))
-                .background(TodoColors.currentTaskConnector)
-        )
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (state == TaskItemState.Current) TodoColors.currentTaskSurface else Color.Transparent)
+                .padding(horizontal = 8.dp, vertical = 7.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            TodoRow(
-                title = title,
-                subtitle = null,
-                meta = null,
-                completed = false,
-                compact = true,
-                emphasis = TodoRowEmphasis.Current,
-                enabled = enabled,
-                buttonStyle = buttonStyle,
-                hoverable = enabled && (onClick != null || buttonStyle),
-                onClick = onClick
-            )
+            TaskItemMarker(state = state, kind = kind)
+            Row(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = title,
+                    color = TodoColors.taskItemTitle(state, enabled),
+                    style = JewelTheme.defaultTextStyle.copy(
+                        fontWeight = if (state == TaskItemState.Current) FontWeight.SemiBold else FontWeight.Normal
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+                if (actionLabel != null) {
+                    DefaultButton(
+                        onClick = { onActionClick?.invoke() },
+                        enabled = enabled && actionEnabled && onActionClick != null,
+                        modifier = Modifier.height(24.dp)
+                    ) {
+                        Text(actionLabel)
+                    }
+                }
+            }
+        }
+        if (response != null) {
             AttachedResponseCard(
                 response = response,
                 onReviewLinkClick = onReviewLinkClick,
                 reviewComments = reviewComments,
                 selectedReviewLocation = selectedReviewLocation,
                 onReviewCommentClick = onReviewCommentClick,
-                modifier = Modifier.padding(start = 18.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 8.dp, end = 8.dp)
             )
-            if (hasMessage) {
-                Spacer(modifier = Modifier.height(8.dp))
+        }
+        if (attachedContent != null) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+                content = attachedContent
+            )
+        }
+    }
+}
+
+@Composable
+private fun TaskTimelineNode(
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+        content = content
+    )
+}
+
+@Composable
+private fun TaskItemMarker(
+    state: TaskItemState,
+    kind: TaskRowKind = TaskRowKind.Task
+) {
+    Box(
+        modifier = Modifier
+            .width(20.dp)
+            .height(20.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (kind == TaskRowKind.FinalCheck) {
+            Icon(
+                key = AllIconsKeys.Actions.Preview,
+                contentDescription = "Final check",
+                tint = TodoColors.taskItemMarkerText(state),
+                modifier = Modifier.size(16.dp)
+            )
+        } else {
+            when (state) {
+                TaskItemState.Completed -> Icon(
+                    key = AllIconsKeys.Actions.Checked,
+                    contentDescription = "Completed",
+                    tint = TodoColors.taskItemMarkerText(state),
+                    modifier = Modifier.size(14.dp)
+                )
+                TaskItemState.Current, TaskItemState.Pending -> Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(TodoColors.taskItemMarkerText(state))
+                )
             }
         }
     }
@@ -899,6 +1031,7 @@ private fun CurrentTaskGroup(
 @Composable
 private fun AttachedResponseCard(
     response: TaskResponseDisplay?,
+    responseLabel: String = "Shoaku review",
     onReviewLinkClick: ((String) -> Unit)? = null,
     reviewComments: List<ReviewComment> = emptyList(),
     selectedReviewLocation: ReviewLocation? = null,
@@ -907,6 +1040,7 @@ private fun AttachedResponseCard(
 ) {
     val displayText = response?.text?.trim().orEmpty()
     val hasMessage = displayText.isNotEmpty()
+    val kind = response?.kind
 
     Column(
         modifier = modifier
@@ -914,41 +1048,25 @@ private fun AttachedResponseCard(
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         if (hasMessage) {
-            Box(
-                modifier = Modifier
-                    .padding(start = 10.dp)
-                    .width(2.dp)
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(TodoColors.currentTaskConnectorSoft)
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(TodoColors.attachedResponseSurface)
-                    .border(1.dp, TodoColors.attachedResponseBorder, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+            if (kind == TaskResponseKind.Status && reviewComments.isEmpty()) {
+                Text(
+                    text = displayText,
+                    color = TodoColors.secondaryText,
+                    style = JewelTheme.defaultTextStyle,
+                    modifier = Modifier.padding(start = 8.dp, top = 2.dp)
+                )
+            } else if (kind == TaskResponseKind.Clarification) {
+                TaskResponsePanel(label = "Shoaku response") {
                     AgentMessageContent(
                         message = displayText,
-                        onLinkClick = onReviewLinkClick,
-                        style = if (response?.isThinking == true || response?.isFixedMessage == true) {
-                            TextStyle(
-                                color = TodoColors.secondaryText,
-                                fontSize = 13.sp,
-                                lineHeight = 20.sp
-                            )
-                        } else {
-                            TextStyle(
-                                color = TodoColors.infoText,
-                                fontSize = 13.sp,
-                                lineHeight = 20.sp
-                            )
-                        }
+                        onLinkClick = onReviewLinkClick
+                    )
+                }
+            } else {
+                TaskResponsePanel(label = responseLabel) {
+                    AgentMessageContent(
+                        message = displayText,
+                        onLinkClick = onReviewLinkClick
                     )
                     if (reviewComments.isNotEmpty()) {
                         Box(
@@ -967,9 +1085,34 @@ private fun AttachedResponseCard(
                             }
                         }
                     }
+                    }
                 }
             }
         }
+    }
+@Composable
+private fun TaskResponsePanel(
+    label: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(6.dp)
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 3.dp, bottom = 2.dp)
+            .clip(shape)
+            .background(TodoColors.taskResponseSurface)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        Text(
+            text = label,
+            color = TodoColors.taskResponseLabelText,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        content()
     }
 }
 
@@ -1032,78 +1175,124 @@ private fun ReviewCommentRow(
     }
 }
 
-private fun reassuringAlignmentMessage(alignmentScore: Double?): String? =
-    if (alignmentScore != null && alignmentScore >= AlignmentGapMessageThreshold) AlignmentGapReassuringMessage else null
-
 @Composable
-private fun ChatDock(
+private fun ConversationComposerNode(
     messages: List<Message>,
+    response: TaskResponseDisplay?,
+    responseLabel: String,
+    reviewComments: List<ReviewComment>,
+    selectedReviewLocation: ReviewLocation?,
+    onResponseLinkClick: ((String) -> Unit)?,
+    onReviewCommentClick: ((ReviewComment) -> Unit)?,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     instructionValue: TextFieldValue,
     onInstructionValueChange: (TextFieldValue) -> Unit,
     enabled: Boolean,
+    placeholder: String,
     onSend: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val listState = rememberLazyListState()
+    val historyListState = rememberLazyListState()
     val visibleMessages = remember(messages) {
         messages.filter { message ->
-            message.command?.isNotBlank() == true || message.text?.isNotBlank() == true
+            isVisibleChatMessage(message)
         }
     }
-
-    LaunchedEffect(visibleMessages.size) {
-        val lastIndex = visibleMessages.lastIndex
-        if (lastIndex >= 0) {
-            listState.animateScrollToItem(lastIndex)
+    LaunchedEffect(expanded, visibleMessages.size) {
+        if (expanded && visibleMessages.isNotEmpty()) {
+            historyListState.scrollToItem(visibleMessages.lastIndex)
         }
     }
-
+    val nodeShape = RoundedCornerShape(7.dp)
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .clip(nodeShape)
+            .background(TodoColors.taskResponseSurface)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        if (visibleMessages.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val visibleLabel = if (expanded) {
+                "Conversation"
+            } else if (response != null) {
+                responseLabel
+            } else {
+                "Conversation"
+            }
+            if (visibleLabel.isNotBlank()) {
                 Text(
-                    text = "No conversation yet.",
-                    color = TodoColors.secondaryText,
-                    fontSize = 12.sp
+                    text = visibleLabel,
+                    color = TodoColors.taskResponseLabelText,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            } else {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+            if (visibleMessages.isNotEmpty()) {
+                Text(
+                    text = if (expanded) "Hide history" else "Show history",
+                    color = TodoColors.linkText,
+                    fontSize = 11.sp,
+                    modifier = Modifier.clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) { onExpandedChange(!expanded) }
                 )
             }
-        } else {
-            ScrollHintLazyColumn(
-                state = listState,
+        }
+        response?.takeUnless { expanded }?.let { currentResponse ->
+            if (currentResponse.kind == TaskResponseKind.Status && reviewComments.isEmpty()) {
+                Text(
+                    text = currentResponse.text,
+                    color = TodoColors.secondaryText,
+                    style = JewelTheme.defaultTextStyle,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
+            } else {
+                AgentMessageContent(
+                    message = currentResponse.text,
+                    onLinkClick = onResponseLinkClick
+                )
+                if (reviewComments.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(TodoColors.reviewCommentDivider)
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        reviewComments.forEach { comment ->
+                            ReviewCommentRow(
+                                comment = comment,
+                                selected = selectedReviewLocation ==
+                                    ReviewLocation(comment.path, comment.line),
+                                onClick = onReviewCommentClick
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (expanded && visibleMessages.isNotEmpty()) {
+            LazyColumn(
+                state = historyListState,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentPadding = PaddingValues(bottom = 4.dp)
+                    .fillMaxWidth()
+                    .heightIn(min = 160.dp, max = 520.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
             ) {
                 itemsIndexed(visibleMessages) { index, entry ->
-                    val previousEntry = visibleMessages.getOrNull(index - 1)
-                    val startsNewTurn =
-                        entry.turnId != null &&
-                        entry.type != "userMessage" &&
-                        entry.turnId != previousEntry?.turnId
-                    val previousIsSameSpeaker =
-                        previousEntry?.type == entry.type &&
-                        previousEntry.turnId == entry.turnId &&
-                        previousEntry.command == null &&
-                        entry.command == null
-
-                    ChatEntryRow(
-                        entry = entry,
-                        showTurnDivider = startsNewTurn,
-                        topSpacing = when {
-                            startsNewTurn -> 18.dp
-                            previousIsSameSpeaker -> 6.dp
-                            else -> 12.dp
-                        }
+                    ConversationEntry(
+                        messages = visibleMessages,
+                        index = index,
+                        entry = entry
                     )
                 }
             }
@@ -1112,6 +1301,7 @@ private fun ChatDock(
             value = instructionValue,
             onValueChange = onInstructionValueChange,
             enabled = enabled,
+            placeholder = placeholder,
             onSend = onSend,
             modifier = Modifier.fillMaxWidth()
         )
@@ -1119,140 +1309,134 @@ private fun ChatDock(
 }
 
 @Composable
-private fun SessionChatPane(
-    session: Item,
-    viewModel: ShoakuViewModel,
-    project: Project?,
-    onCollapse: () -> Unit,
-    modifier: Modifier = Modifier
+private fun ConversationEntry(
+    messages: List<Message>,
+    index: Int,
+    entry: Message
 ) {
-    val messages = session.messages.orEmpty()
-    var instructionValue by remember(session.sessionKey) { mutableStateOf(TextFieldValue()) }
-    val isEnabled = session.shoakuId != null
-    val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
-        val base = session.tokenUsage ?: return@remember null
-        val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
-        base.copy(maxTokens = overrideMax.coerceAtLeast(1))
-    }
+    val previousEntry = messages.getOrNull(index - 1)
+    val startsNewTurn =
+        entry.turnId != null &&
+            entry.type != "userMessage" &&
+            entry.turnId != previousEntry?.turnId
+    val previousIsSameSpeaker =
+        previousEntry?.type == entry.type &&
+            previousEntry.turnId == entry.turnId &&
+            previousEntry.command == null &&
+            entry.command == null
 
-    SessionSectionCard(
-        header = {
-            ChatHeader(
-                tokenUsage = effectiveTokenUsage,
-                status = session.status,
-                actionLabel = "Fold",
-                onAction = onCollapse,
-                onIncreaseBudget = {
-                    val shoakuId = session.shoakuId ?: return@ChatHeader
-                    val currentMax = effectiveTokenUsage?.maxTokens ?: session.tokenUsage?.maxTokens ?: return@ChatHeader
-                    val increment = (currentMax / 10f).toInt().coerceAtLeast(1)
-                    viewModel.tokenBudgetOverrides[shoakuId] = currentMax + increment
-                }
-            )
-        },
-        modifier = modifier.fillMaxSize()
-    ) {
-        ChatDock(
-            messages = messages,
-            instructionValue = instructionValue,
-            onInstructionValueChange = { instructionValue = it },
-            enabled = isEnabled,
-            onSend = {
-                sendSessionReply(
-                    project = project,
-                    shoakuId = session.shoakuId,
-                    instruction = instructionValue.text
-                )
-                instructionValue = TextFieldValue()
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
-
-@Composable
-private fun CollapsedChatBar(
-    session: Item,
-    viewModel: ShoakuViewModel,
-    onExpand: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
-        val base = session.tokenUsage ?: return@remember null
-        val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
-        base.copy(maxTokens = overrideMax.coerceAtLeast(1))
-    }
-    Box(
-        modifier = modifier
-            .background(TodoColors.sectionSurface, RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    ) {
-        ChatHeader(
-            tokenUsage = effectiveTokenUsage,
-            status = session.status,
-            actionLabel = "Unfold",
-            onAction = onExpand,
-            onIncreaseBudget = {
-                val shoakuId = session.shoakuId ?: return@ChatHeader
-                val currentMax = effectiveTokenUsage?.maxTokens ?: session.tokenUsage?.maxTokens ?: return@ChatHeader
-                val increment = (currentMax / 10f).toInt().coerceAtLeast(1)
-                viewModel.tokenBudgetOverrides[shoakuId] = currentMax + increment
-            }
-        )
-    }
-}
-
-@Composable
-private fun ChatHeader(
-    tokenUsage: TokenUsageUi?,
-    status: AgentStatusUi?,
-    actionLabel: String,
-    onAction: () -> Unit,
-    onIncreaseBudget: () -> Unit
-) {
-    SessionSectionHeader(
-        title = "Chat",
-        trailing = {
-            TokenUsageIndicator(
-                tokenUsage = tokenUsage,
-                status = status,
-                onIncreaseBudget = onIncreaseBudget
-            )
-            Text(
-                text = actionLabel,
-                color = TodoColors.linkText,
-                fontSize = 12.sp,
-                modifier = Modifier.clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) { onAction() }
-            )
+    ChatEntryRow(
+        entry = entry,
+        showTurnDivider = startsNewTurn,
+        topSpacing = when {
+            index == 0 -> 4.dp
+            startsNewTurn -> 14.dp
+            previousIsSameSpeaker -> 4.dp
+            else -> 8.dp
         }
     )
 }
 
-private fun taskResponseDisplay(messages: List<Message>): TaskResponseDisplay? {
+internal fun alignmentDisplayState(messages: List<Message>): AlignmentDisplayState {
     val latestScoredAgentMessage = messages.lastOrNull {
         it.type == "agentMessage" && it.alignmentScore != null
-    } ?: return null
+    } ?: return AlignmentDisplayState.Unavailable
     val alignmentScore = requireNotNull(latestScoredAgentMessage.alignmentScore)
 
-    return if (latestScoredAgentMessage.phase == "final_answer") {
-        if (alignmentScore >= AlignmentGapMessageThreshold || latestScoredAgentMessage.text.isNullOrBlank()) {
-            TaskResponseDisplay(
-                text = AlignmentGapReassuringMessage,
-                isFixedMessage = true
-            )
-        } else {
-            TaskResponseDisplay(
-                text = latestScoredAgentMessage.text,
-                isFixedMessage = false
-            )
+    if (latestScoredAgentMessage.phase != "final_answer") {
+        return AlignmentDisplayState.Checking
+    }
+    if (alignmentScore >= AlignmentGapMessageThreshold) {
+        return AlignmentDisplayState.InSync
+    }
+    return AlignmentDisplayState.NeedsInput(
+        latestScoredAgentMessage.text?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: AlignmentFallbackMessage
+    )
+}
+
+internal fun compactConversationMessages(messages: List<Message>): List<Message> {
+    val checkpointIndex = messages.indexOfLast {
+        it.type == "agentMessage" &&
+            it.phase == "final_answer" &&
+            it.alignmentScore != null
+    }
+    val checkpoint = messages.getOrNull(checkpointIndex)
+    val startsWithQuestion =
+        checkpoint?.alignmentScore?.let { it < AlignmentGapMessageThreshold } == true
+    val relevant = messages.drop(
+        when {
+            checkpointIndex < 0 -> 0
+            startsWithQuestion -> checkpointIndex
+            else -> checkpointIndex + 1
         }
-    } else {
-        TaskResponseDisplay(text = ThinkingMessage, isThinking = true)
+    ).filter(::isConversationMessage)
+
+    if (relevant.isEmpty()) {
+        return emptyList()
+    }
+
+    if (startsWithQuestion) {
+        val question = relevant.first()
+        val latestUserIndex = relevant.indexOfLast { it.type == "userMessage" }
+        if (latestUserIndex < 0) {
+            return listOf(question)
+        }
+        val latestAgentAfterUser = relevant
+            .drop(latestUserIndex + 1)
+            .lastOrNull { it.type == "agentMessage" }
+        return buildList {
+            add(question)
+            add(relevant[latestUserIndex])
+            latestAgentAfterUser?.let(::add)
+        }.distinct()
+    }
+
+    val latestUserIndex = relevant.indexOfLast { it.type == "userMessage" }
+    if (latestUserIndex < 0) {
+        return relevant.takeLast(1)
+    }
+    val latestAgentAfterUser = relevant
+        .drop(latestUserIndex + 1)
+        .lastOrNull { it.type == "agentMessage" }
+    return buildList {
+        add(relevant[latestUserIndex])
+        latestAgentAfterUser?.let(::add)
     }
 }
+
+internal fun conversationWithoutCheckResult(
+    messages: List<Message>,
+    checkResult: Message?
+): List<Message> {
+    if (checkResult == null) {
+        return messages
+    }
+    return messages.filterNot { message ->
+        message === checkResult ||
+            (message.turnId != null && message.turnId == checkResult.turnId)
+    }
+}
+
+internal fun preferredTaskResponse(
+    conversation: List<Message>,
+    taskCheckResult: Message?
+): Message? =
+    taskCheckResult ?: conversation.lastOrNull { message ->
+        message.type == "agentMessage" &&
+            message.command.isNullOrBlank() &&
+            !message.text.isNullOrBlank() &&
+            message.phase != "final_check"
+    }
+
+private fun isConversationMessage(message: Message): Boolean =
+    message.command.isNullOrBlank() &&
+        !message.text.isNullOrBlank() &&
+        message.type in setOf("userMessage", "agentMessage") &&
+        message.phase != "final_check"
+
+private fun isVisibleChatMessage(message: Message): Boolean =
+    message.command?.isNotBlank() == true || message.text?.isNotBlank() == true
 
 private fun finalCheckResponse(messages: List<Message>): Message? =
     messages.lastOrNull {
@@ -1666,94 +1850,93 @@ private fun ChatComposer(
     value: TextFieldValue,
     onValueChange: (TextFieldValue) -> Unit,
     enabled: Boolean,
+    placeholder: String = "Ask Shoaku",
     onSend: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val canSend = enabled && value.text.isNotBlank()
     var isFocused by remember { mutableStateOf(false) }
     val composerShape = RoundedCornerShape(16.dp)
-    Column(
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .clipToBounds(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+            .clip(composerShape)
+            .background(TodoColors.composerSurface)
+            .border(
+                1.dp,
+                if (isFocused) TodoColors.composerFocusBorder else TodoColors.composerBorder,
+                composerShape
+            )
+            .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-        Box(
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(composerShape)
-                .background(TodoColors.composerSurface)
-                .border(
-                    1.dp,
-                    if (isFocused) TodoColors.composerFocusBorder else TodoColors.composerBorder,
-                    composerShape
-                )
-                .padding(horizontal = 14.dp, vertical = 12.dp)
-        ) {
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(end = 42.dp)
-                    .defaultMinSize(minHeight = 52.dp)
-                    .onFocusChanged { isFocused = it.isFocused }
-                    .onPreviewKeyEvent { event ->
-                        if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
-                            if (event.isShiftPressed) {
-                                onValueChange(value.insertNewline())
-                                true
-                            } else if (canSend) {
-                                onSend()
-                                true
-                            } else {
-                                false
-                            }
+                .defaultMinSize(minHeight = 64.dp)
+                .padding(end = 42.dp, bottom = 26.dp)
+                .onFocusChanged { isFocused = it.isFocused }
+                .onPreviewKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
+                        if (event.isShiftPressed) {
+                            onValueChange(value.insertNewline())
+                            true
+                        } else if (canSend) {
+                            onSend()
+                            true
                         } else {
                             false
                         }
-                    },
-                enabled = enabled,
-                maxLines = 8,
-                textStyle = TextStyle(
-                    color = TodoColors.primaryText,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp
-                ),
-                cursorBrush = SolidColor(TodoColors.primaryText),
-                decorationBox = { innerTextField ->
-                    if (value.text.isEmpty()) {
-                        Text(
-                            text = "Ask Shoaku",
-                            color = TodoColors.secondaryText.copy(alpha = 0.75f),
-                            fontSize = 13.sp
-                        )
+                    } else {
+                        false
                     }
-                    innerTextField()
-                }
-            )
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(30.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        if (canSend) TodoColors.composerSendSurface else TodoColors.composerSendSurface.copy(alpha = 0.35f)
+                },
+            enabled = enabled,
+            maxLines = 8,
+            textStyle = TextStyle(
+                color = TodoColors.primaryText,
+                fontSize = 13.sp,
+                lineHeight = 18.sp
+            ),
+            cursorBrush = SolidColor(TodoColors.primaryText),
+            decorationBox = { innerTextField ->
+                if (value.text.isEmpty()) {
+                    Text(
+                        text = placeholder,
+                        color = TodoColors.secondaryText.copy(alpha = 0.75f),
+                        fontSize = 13.sp
                     )
-                    .clickable(enabled = canSend) { onSend() },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    key = ChatSendIconKey,
-                    contentDescription = "Send"
-                )
+                }
+                innerTextField()
             }
-        }
+        )
         Text(
             text = "Enter to send  Shift+Enter for newline",
             color = TodoColors.secondaryText.copy(alpha = 0.72f),
-            fontSize = 11.sp
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(end = 42.dp)
         )
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .size(30.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(
+                    if (canSend) TodoColors.composerSendSurface else TodoColors.composerSendSurface.copy(alpha = 0.35f)
+                )
+                .clickable(enabled = canSend) { onSend() },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                key = ChatSendIconKey,
+                contentDescription = "Send"
+            )
+        }
     }
 }
 
@@ -1839,21 +2022,32 @@ private fun SessionSectionHeader(
     title: String,
     trailing: @Composable RowScope.() -> Unit = {}
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            text = title,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TodoColors.primaryText
-        )
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            content = trailing
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = TodoColors.primaryText
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                content = trailing
+            )
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(TodoColors.sectionDivider)
         )
     }
 }
@@ -2017,6 +2211,8 @@ private fun ChatEntryRow(
                     Text(
                         text = message,
                         color = TodoColors.userMessageText,
+                        fontSize = 13.sp,
+                        lineHeight = 21.sp,
                         modifier = Modifier
                             .clip(userBubbleShape)
                             .background(TodoColors.userMessageSurface)
@@ -2048,11 +2244,11 @@ private fun AgentMessageContent(
     style: TextStyle = TextStyle(
         color = TodoColors.infoText,
         fontSize = 13.sp,
-        lineHeight = 20.sp
+        lineHeight = 21.sp
     )
 ) {
     val blocks = remember(message) { parseAgentMessageBlocks(message) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         blocks.forEach { block ->
             when (block) {
                 is AgentMessageBlock.Paragraph -> MarkdownTextBlock(text = block.text, style = style, onLinkClick = onLinkClick)
@@ -2062,7 +2258,7 @@ private fun AgentMessageContent(
                         color = TodoColors.primaryText,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = headingFontSize(block.level),
-                        lineHeight = (headingFontSize(block.level).value + 6).sp
+                        lineHeight = (headingFontSize(block.level).value + 7).sp
                     )
                 )
                 is AgentMessageBlock.UnorderedList -> MarkdownList(
@@ -2091,7 +2287,7 @@ private fun AgentMessageContent(
                             color = TodoColors.secondaryText,
                             fontStyle = FontStyle.Italic,
                             fontSize = 13.sp,
-                            lineHeight = 20.sp
+                            lineHeight = 21.sp
                         )
                     )
                 }
@@ -2132,7 +2328,7 @@ private fun MarkdownTextBlock(
     style: TextStyle = TextStyle(
         color = TodoColors.infoText,
         fontSize = 13.sp,
-        lineHeight = 20.sp
+        lineHeight = 21.sp
     )
 ) {
     val annotatedText = remember(text) { buildMarkdownAnnotatedString(text) }
@@ -2539,30 +2735,20 @@ private fun TodoRow(
     title: String,
     subtitle: String?,
     meta: String?,
-    completed: Boolean,
+    state: TaskItemState,
     modifier: Modifier = Modifier,
-    compact: Boolean = false,
-    emphasis: TodoRowEmphasis = TodoRowEmphasis.Default,
     enabled: Boolean = true,
-    buttonStyle: Boolean = false,
     hoverable: Boolean = false,
     onClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isHovered by interactionSource.collectIsHoveredAsState()
-    val effectiveEmphasis = emphasis
-    val colors = when {
-        buttonStyle && enabled && isHovered -> TodoColors.reviewButtonHovered
-        buttonStyle -> TodoColors.reviewButton
-        enabled && hoverable && isHovered -> TodoColors.hoveredCard(effectiveEmphasis)
-        else -> TodoColors.card(effectiveEmphasis)
-    }
-    val shape = RoundedCornerShape(TodoMetrics.cardCornerRadius)
+    val shape = RoundedCornerShape(6.dp)
     val cardModifier = modifier
         .fillMaxWidth()
-        .border(width = if (buttonStyle) 2.dp else 1.dp, color = colors.border, shape = shape)
-        .background(color = colors.background, shape = shape)
+        .clip(shape)
+        .background(TodoColors.goalRowSurface(state, enabled && hoverable && isHovered), shape)
         .then(if (hoverable) Modifier.hoverable(interactionSource) else Modifier)
         .then(
             if (onClick != null && enabled) {
@@ -2571,27 +2757,25 @@ private fun TodoRow(
                 Modifier
             }
         )
-        .padding(
-            horizontal = TodoMetrics.horizontalPadding,
-            vertical = if (compact) TodoMetrics.compactVerticalPadding else TodoMetrics.verticalPadding
-        )
+        .padding(horizontal = 8.dp, vertical = 7.dp)
 
     Box {
         Row(
             modifier = cardModifier,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top
         ) {
+            TaskItemMarker(state = state)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(if (subtitle != null) 4.dp else 0.dp)
             ) {
                 Text(
                     text = title,
-                    fontSize = if (compact) 14.sp else 15.sp,
-                    fontWeight = if (compact) FontWeight.Medium else FontWeight.SemiBold,
-                    color = TodoColors.todoTitleText(emphasis = effectiveEmphasis, completed = completed, enabled = enabled),
-                    textDecoration = if (completed) TextDecoration.LineThrough else TextDecoration.None
+                    fontSize = 14.sp,
+                    fontWeight = if (state == TaskItemState.Current) FontWeight.SemiBold else FontWeight.Normal,
+                    color = TodoColors.taskItemTitle(state, enabled),
+                    textDecoration = if (state == TaskItemState.Completed) TextDecoration.LineThrough else TextDecoration.None
                 )
                 subtitle?.let {
                     Text(
@@ -2655,11 +2839,6 @@ private fun InfoCard(
     }
 }
 
-private data class TodoCardColors(
-    val background: Color,
-    val border: Color
-)
-
 private data class HeaderItemColors(
     val background: Color,
     val border: Color,
@@ -2712,7 +2891,7 @@ private object SessionHeaderColors {
 
 private object TodoMetrics {
     val cardCornerRadius = 16.dp
-    val horizontalPadding = 12.dp
+    val horizontalPadding = 8.dp
     val verticalPadding = 10.dp
     val compactVerticalPadding = 8.dp
 }
@@ -2738,7 +2917,8 @@ private object TodoColors {
     private val mutedPendingText = blend(primaryText, secondaryText, 0.68f)
     val infoSurface = blend(panelBackground, listBackground, 0.9f)
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
-    val sectionSurface = overlay(infoBackground.copy(alpha = 0.08f), blend(panelBackground, listBackground, 0.78f))
+    val sectionSurface = blend(panelBackground, listBackground, 0.78f)
+    val sectionDivider = componentBorder.copy(alpha = 0.48f)
     val codeBlockChatSurface = namedColor("Editor.background", 0xFF1E1F22, 0xFFF4F7FB)
     val popupSurface = overlay(infoBackground.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.62f))
     val popupBorder = componentBorder.copy(alpha = 0.9f)
@@ -2748,8 +2928,8 @@ private object TodoColors {
     val userMessageSurface = overlay(componentBorder.copy(alpha = 0.26f), blend(listBackground, panelBackground, 0.3f))
     val userMessageBorder = overlay(componentBorder.copy(alpha = 0.42f), brandAccentPrimary.copy(alpha = 0.08f))
     val userMessageText = namedColor("TextArea.foreground", 0xFFE8EDF5, 0xFF2D3848)
-    val composerSurface = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.28f))
-    val composerBorder = componentBorder.copy(alpha = 0.82f)
+    val composerSurface = overlay(componentBorder.copy(alpha = 0.14f), codeBlockChatSurface)
+    val composerBorder = componentBorder.copy(alpha = 0.68f)
     val composerFocusBorder = focusedBorder
     val composerSendSurface = overlay(brandAccentPrimary.copy(alpha = 0.84f), blend(listBackground, panelBackground, 0.12f))
     val scrollHintSurface = overlay(brandAccentBlend.copy(alpha = 0.2f), blend(listBackground, panelBackground, 0.4f))
@@ -2771,27 +2951,28 @@ private object TodoColors {
     private val activityGlowStart = Color(0xFF38BDF8)
     private val activityGlowEnd = Color(0xFF2F6FED)
     val statusRunningText = namedColor("Label.foreground", 0xFFEAF4FF, 0xFF24538A)
-    val currentTaskConnector = componentBorder.copy(alpha = 0.72f)
-    val currentTaskConnectorSoft = componentBorder.copy(alpha = 0.42f)
-    val attachedResponseSurface = overlay(infoBackground.copy(alpha = 0.1f), blend(listBackground, panelBackground, 0.48f))
-    val attachedResponseBorder = componentBorder.copy(alpha = 0.72f)
+    val activeTaskGroupSurface = overlay(brandAccentPrimary.copy(alpha = 0.05f), sectionSurface)
+    val currentTaskSurface = overlay(brandAccentPrimary.copy(alpha = 0.09f), activeTaskGroupSurface)
+    val taskResponseSurface = codeBlockChatSurface
+    val taskResponseLabelText = blend(infoText, secondaryText, 0.72f)
     val inlineCodeSurface = overlay(componentBorder.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.52f))
     val inlineCodeText = namedColor("Label.foreground", 0xFFF3F4F6, 0xFF20252B)
-    private val mutedPendingSurface = overlay(infoBackground.copy(alpha = 0.04f), blend(panelBackground, listBackground, 0.76f))
-    private val mutedPendingBorder = componentBorder.copy(alpha = 0.58f)
-
-    val reviewButton = TodoCardColors(
-        background = overlay(brandAccentPrimary.copy(alpha = 0.16f), blend(listBackground, panelBackground, 0.42f)),
-        border = brandAccentPrimary.copy(alpha = 0.72f)
-    )
-    val reviewButtonHovered = TodoCardColors(
-        background = overlay(hoverBackground.copy(alpha = 0.34f), overlay(brandAccentPrimary.copy(alpha = 0.22f), blend(listBackground, panelBackground, 0.34f))),
-        border = brandAccentSecondary.copy(alpha = 0.95f)
-    )
     val reviewCommentHoverSurface = overlay(hoverBackground.copy(alpha = 0.22f), blend(listBackground, panelBackground, 0.44f))
     val reviewCommentSelectedSurface = overlay(brandAccentPrimary.copy(alpha = 0.18f), blend(listBackground, panelBackground, 0.4f))
     val reviewCommentSelectedBorder = brandAccentPrimary.copy(alpha = 0.72f)
     val reviewCommentDivider = componentBorder.copy(alpha = 0.54f)
+
+    fun taskItemMarkerText(state: TaskItemState): Color = when (state) {
+        TaskItemState.Current -> brandAccentPrimary
+        TaskItemState.Completed -> secondaryText
+        TaskItemState.Pending -> secondaryText
+    }
+
+    fun taskItemTitle(state: TaskItemState, enabled: Boolean): Color = when {
+        state == TaskItemState.Completed -> completedText
+        !enabled -> secondaryText
+        else -> primaryText
+    }
 
     fun tokenUsageIndicator(usageFraction: Float): Color {
         val clampedFraction = usageFraction.coerceIn(0f, 1f)
@@ -2825,51 +3006,13 @@ private object TodoColors {
     fun statusRunningBorder(activityPulse: Float): Color =
         blend(activityGlowStart, activityGlowEnd, 0.56f).copy(alpha = 0.42f + 0.18f * activityPulse.coerceIn(0f, 1f))
 
-    fun card(emphasis: TodoRowEmphasis) = when (emphasis) {
-        TodoRowEmphasis.Default -> TodoCardColors(
-            background = overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.44f)),
-            border = componentBorder.copy(alpha = 0.95f)
-        )
-        TodoRowEmphasis.Current -> TodoCardColors(
-            background = overlay(brandAccentPrimary.copy(alpha = 0.14f), overlay(infoBackground.copy(alpha = 0.12f), blend(listBackground, panelBackground, 0.4f))),
-            border = overlay(brandAccentPrimary.copy(alpha = 0.22f), componentBorder.copy(alpha = 0.95f))
-        )
-        TodoRowEmphasis.MutedPending -> TodoCardColors(
-            background = overlay(infoBackground.copy(alpha = 0.02f), blend(panelBackground, listBackground, 0.8f)),
-            border = componentBorder.copy(alpha = 0.5f)
-        )
-        TodoRowEmphasis.Completed -> TodoCardColors(
-            background = overlay(infoBackground.copy(alpha = 0.07f), blend(panelBackground, listBackground, 0.7f)),
-            border = componentBorder.copy(alpha = 0.72f)
-        )
+    fun goalRowSurface(state: TaskItemState, hovered: Boolean): Color = when {
+        state == TaskItemState.Current && hovered ->
+            overlay(hoverBackground.copy(alpha = 0.16f), currentTaskSurface)
+        state == TaskItemState.Current -> currentTaskSurface
+        hovered -> overlay(hoverBackground.copy(alpha = 0.2f), Color.Transparent)
+        else -> Color.Transparent
     }
-
-    fun hoveredCard(emphasis: TodoRowEmphasis) = when (emphasis) {
-        TodoRowEmphasis.Default -> TodoCardColors(
-            background = overlay(hoverBackground.copy(alpha = 0.28f), blend(listBackground, panelBackground, 0.36f)),
-            border = componentBorder.copy(alpha = 1f)
-        )
-        TodoRowEmphasis.Current -> TodoCardColors(
-            background = overlay(hoverBackground.copy(alpha = 0.22f), overlay(brandAccentPrimary.copy(alpha = 0.14f), blend(listBackground, panelBackground, 0.38f))),
-            border = overlay(brandAccentPrimary.copy(alpha = 0.28f), componentBorder.copy(alpha = 1f))
-        )
-        TodoRowEmphasis.MutedPending -> TodoCardColors(
-            background = overlay(hoverBackground.copy(alpha = 0.12f), blend(panelBackground, listBackground, 0.78f)),
-            border = componentBorder.copy(alpha = 0.72f)
-        )
-        TodoRowEmphasis.Completed -> TodoCardColors(
-            background = overlay(hoverBackground.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.62f)),
-            border = componentBorder.copy(alpha = 0.84f)
-        )
-    }
-
-    fun todoTitleText(emphasis: TodoRowEmphasis, completed: Boolean, enabled: Boolean = true): Color =
-        when {
-            !enabled -> disabledText
-            completed -> completedText
-            emphasis == TodoRowEmphasis.MutedPending -> mutedPendingText
-            else -> primaryText
-        }
 }
 
 private data class AgentActivityState(
