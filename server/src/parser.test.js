@@ -159,3 +159,32 @@ test('parse trailing shoaku label', (t) => {
     ]
   );
 });
+
+test('parse code block', (t) => {
+  assert.deepStrictEqual(parser.parse([
+      '- [shoaku] a',
+      '  ```bash',
+      '  echo "hello"',
+      '  ```'
+    ].join('\n')), [
+      {
+        type: 'text',
+        content: 'a',
+        line: 0,
+        labelPosition: { line: 0, start: 2, end: 10 },
+        children: [
+          {
+            type: 'text',
+            content: [
+              '```bash',
+              'echo "hello"',
+              '```'
+            ].join('\n'),
+            line: 1,
+            children: []
+          }
+        ]
+      }
+    ]
+  );
+});
