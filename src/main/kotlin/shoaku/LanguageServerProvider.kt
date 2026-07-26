@@ -57,6 +57,7 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
         fun syncGoals(params: SyncGoalsParams) {
             project.service<ShoakuSettings>().viewModel.apply {
                 items = params.lists
+                hasReceivedGoals = true
             }
         }
 

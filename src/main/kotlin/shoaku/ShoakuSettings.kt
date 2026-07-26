@@ -20,12 +20,15 @@ class ShoakuSettings : PersistentStateComponent<ShoakuSettings.State> {
     }
 
     data class State(
-        var filePath: String = ""
+        var filePath: String = "",
+        var openSessionIds: MutableList<String> = mutableListOf(),
+        var selectedSessionId: String? = null
     )
 }
 
 class ShoakuViewModel {
     var items by mutableStateOf<List<Item>>(emptyList())
+    var hasReceivedGoals by mutableStateOf(false)
     var goalFilter by mutableStateOf(GoalFilter.All)
     var selectedReviewLocation by mutableStateOf<ReviewLocation?>(null)
     val diffResponses = mutableStateMapOf<String, ShowDiffParams>()

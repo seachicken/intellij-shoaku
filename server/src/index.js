@@ -122,10 +122,24 @@ appServer.stdout.on('data', async (chunk) => {
         break;
       }
 
+      case 'item/started':
+        if (message.params.item.type === 'contextCompaction') {
+          message.params.item.type = 'contextCompactionStarted';
+          appendChatHistory(sessionToShoaku.get(message.params.threadId), message.params.turnId, message.params.item);
+          await syncShoakuLists(initializeParams.initializationOptions.filePath);
+        }
+        break;
+
       case 'item/completed':
         if (pendingTurns.get(message.params.threadId)?.has(message.params.turnId)) {
           const { id, callbacks } = pendingTurns.get(message.params.threadId).get(message.params.turnId);
           callbacks?.onItemCompleted(id, message.params)
+        }
+
+        // `thread/compact/start` does not return a `turnId`, so process it here instead of adding it to `pendingTurns`.
+        if (message.params.item.type === 'contextCompaction') {
+          appendChatHistory(sessionToShoaku.get(message.params.threadId), message.params.turnId, message.params.item);
+          await syncShoakuLists(initializeParams.initializationOptions.filePath);
         }
         break;
 

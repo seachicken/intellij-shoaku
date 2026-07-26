@@ -96,6 +96,8 @@ class GoalsWindowFactory : ToolWindowFactory {
                 project.service<ShoakuSettings>().viewModel,
                 project.service<ShoakuSettings>().state,
                 project,
+                initialOpenSessionKeys = project.service<ShoakuSettings>().state.openSessionIds.map(::SessionKey),
+                initialSelectedSessionKey = project.service<ShoakuSettings>().state.selectedSessionId?.let(::SessionKey),
                 onFilePathChange = { newPath ->
                     project.sendNotificationToShoakuServer {
                         it.didChangeGoalsFilePath(DidChangeGoalsFilePath(newPath))
@@ -143,11 +145,25 @@ private fun MyToolWindowContent(
     val openSessions = openSessionKeys.mapNotNull { key -> goals.firstOrNull { it.sessionKey == key } }
     val selectedSession = selectedSessionKey?.let { key -> goals.firstOrNull { it.sessionKey == key } }
 
-    LaunchedEffect(goals) {
+    fun persistOpenSessions() {
+        state.openSessionIds = openSessionKeys.map(SessionKey::shoakuId).toMutableList()
+    }
+
+    fun selectSession(key: SessionKey?) {
+        selectedSessionKey = key
+        state.selectedSessionId = key?.shoakuId
+    }
+
+    LaunchedEffect(goals, vm.hasReceivedGoals) {
+        if (!vm.hasReceivedGoals) {
+            return@LaunchedEffect
+        }
         val currentKeys = goals.map { it.sessionKey }.toSet()
-        openSessionKeys.removeAll { it !in currentKeys }
+        if (openSessionKeys.removeAll { it !in currentKeys }) {
+            persistOpenSessions()
+        }
         if (selectedSessionKey != null && selectedSessionKey !in currentKeys) {
-            selectedSessionKey = null
+            selectSession(null)
         }
         instructionValues.keys.retainAll(currentKeys)
         expandedConversationKeys.keys.retainAll(currentKeys)
@@ -162,12 +178,13 @@ private fun MyToolWindowContent(
         SessionHeaderSwitcher(
             openSessions = openSessions,
             selectedSessionKey = selectedSessionKey,
-            onSelectSessions = { selectedSessionKey = null },
-            onSelectSession = { selectedSessionKey = it },
+            onSelectSessions = { selectSession(null) },
+            onSelectSession = ::selectSession,
             onCloseSession = { key ->
                 openSessionKeys.remove(key)
+                persistOpenSessions()
                 if (selectedSessionKey == key) {
-                    selectedSessionKey = null
+                    selectSession(null)
                 }
             }
         )
@@ -192,8 +209,9 @@ private fun MyToolWindowContent(
                     val key = session.sessionKey
                     if (key !in openSessionKeys) {
                         openSessionKeys.add(key)
+                        persistOpenSessions()
                     }
-                    selectedSessionKey = key
+                    selectSession(key)
                 }
             )
         } else {
@@ -1415,7 +1433,9 @@ private fun isConversationMessage(message: Message): Boolean =
         message.phase != "final_check"
 
 private fun isVisibleChatMessage(message: Message): Boolean =
-    message.command?.isNotBlank() == true || message.text?.isNotBlank() == true
+    message.type in setOf("contextCompaction", "contextCompactionStarted") ||
+        message.command?.isNotBlank() == true ||
+        message.text?.isNotBlank() == true
 
 private fun finalCheckResponse(messages: List<Message>): Message? =
     messages.lastOrNull {
@@ -2155,7 +2175,7 @@ private fun ChatEntryRow(
     showTurnDivider: Boolean,
     topSpacing: Dp
 ) {
-    if (entry.command != null) {
+    if (entry.command != null || entry.type in setOf("contextCompaction", "contextCompactionStarted")) {
         ChatActivityRow(
             entry = entry,
             showTurnDivider = showTurnDivider,
@@ -2604,8 +2624,15 @@ private fun ChatActivityRow(
     showTurnDivider: Boolean,
     topSpacing: Dp
 ) {
-    val command = entry.command ?: return
-    val verb = if (entry.type == "webSearch") "Searched" else "Ran"
+    val activityLabel = when (entry.type) {
+        "contextCompactionStarted" -> "Compacting context..."
+        "contextCompaction" -> "Compacted context"
+        else -> {
+            val command = entry.command ?: return
+            val verb = if (entry.type == "webSearch") "Searched" else "Ran"
+            "$verb $command"
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2616,7 +2643,7 @@ private fun ChatActivityRow(
             ChatTurnDivider()
         }
         Text(
-            text = "$verb $command",
+            text = activityLabel,
             fontSize = 11.sp,
             color = TodoColors.secondaryText.copy(alpha = 0.78f)
         )
