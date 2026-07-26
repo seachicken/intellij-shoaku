@@ -68,7 +68,6 @@ import org.jetbrains.jewel.ui.icon.PathIconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import shoaku.AgentStatusUi
 import shoaku.AppLanguageServer
-import shoaku.ApplyDiffParams
 import shoaku.DidChangeGoalsFilePath
 import shoaku.GoalFilter
 import shoaku.Item
@@ -78,7 +77,6 @@ import shoaku.ReplyParams
 import shoaku.ReviewComment
 import shoaku.ShoakuSettings
 import shoaku.ShoakuViewModel
-import shoaku.ShowDiffParams
 import shoaku.StartFinalCheckParams
 import shoaku.StartSessionParams
 import shoaku.TokenUsageUi
@@ -201,7 +199,6 @@ private fun MyToolWindowContent(
         } else {
             SessionDetailContent(
                 session = selectedSession,
-                filePath = state.filePath,
                 viewModel = vm,
                 project = project,
                 instructionValue = instructionValues[selectedSession.sessionKey] ?: TextFieldValue(),
@@ -457,7 +454,6 @@ private fun SessionListContent(
 @Composable
 private fun SessionDetailContent(
     session: Item,
-    filePath: String,
     viewModel: ShoakuViewModel,
     project: Project? = null,
     instructionValue: TextFieldValue,
@@ -466,12 +462,9 @@ private fun SessionDetailContent(
     onConversationExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val diffResponse = session.shoakuId?.let { viewModel.diffResponses[it] }
     val finalCheckState = remember(session.shoakuId) { FinalCheckDisplayState() }
     SessionTaskPane(
         session = session,
-        diffResponse = diffResponse,
-        filePath = filePath,
         viewModel = viewModel,
         project = project,
         finalCheckState = finalCheckState,
@@ -486,8 +479,6 @@ private fun SessionDetailContent(
 @Composable
 private fun SessionTaskPane(
     session: Item,
-    diffResponse: ShowDiffParams?,
-    filePath: String,
     viewModel: ShoakuViewModel,
     project: Project?,
     finalCheckState: FinalCheckDisplayState,
@@ -506,15 +497,20 @@ private fun SessionTaskPane(
     val messages = session.messages.orEmpty()
     val hasConversationHistory = remember(messages) { messages.any(::isVisibleChatMessage) }
     val alignmentState = remember(messages) { alignmentDisplayState(messages) }
-    val compactConversation = remember(messages) { compactConversationMessages(messages) }
     val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
         val base = session.tokenUsage ?: return@remember null
         val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
         base.copy(maxTokens = overrideMax.coerceAtLeast(1))
     }
-    val taskResponse = remember(alignmentState) {
-        (alignmentState as? AlignmentDisplayState.NeedsInput)?.let {
-            TaskResponseDisplay(text = it.message, kind = TaskResponseKind.Clarification)
+    val alignmentMessage = remember(alignmentState) {
+        when (alignmentState) {
+            AlignmentDisplayState.Unavailable -> null
+            AlignmentDisplayState.Checking ->
+                Message(type = "agentMessage", text = ThinkingMessage)
+            AlignmentDisplayState.InSync ->
+                Message(type = "agentMessage", text = AlignmentInSyncMessage)
+            is AlignmentDisplayState.NeedsInput ->
+                Message(type = "agentMessage", text = alignmentState.message)
         }
     }
     val finalCheckMessage = remember(messages, finalCheckState.startMessageCount.value) {
@@ -536,12 +532,6 @@ private fun SessionTaskPane(
     val taskCheckRequested = taskCheckState.requested.value
     val taskCheckThinking = taskCheckState.thinking.value
     val replyThinking = replyState.thinking.value
-    val displayedConversation = remember(compactConversation, taskCheckMessage, finalCheckMessage) {
-        conversationWithoutCheckResult(
-            conversationWithoutCheckResult(compactConversation, taskCheckMessage),
-            finalCheckMessage
-        )
-    }
     val taskCheckDisplayMessage = when {
         taskCheckThinking -> Message(
             type = "agentMessage",
@@ -551,8 +541,10 @@ private fun SessionTaskPane(
         taskCheckRequested -> taskCheckMessage
         else -> null
     }
-    val preferredCurrentTaskResponse = remember(displayedConversation, taskCheckDisplayMessage) {
-        preferredTaskResponse(displayedConversation, taskCheckDisplayMessage)
+    val latestFinalPhaseMessage = remember(messages) {
+        messages.lastOrNull { message ->
+            message.type == "agentMessage" && message.phase == "final_answer"
+        }
     }
     val isTaskCheckResponse = taskCheckDisplayMessage != null
     val finalCheckDisplayMessage = when {
@@ -572,8 +564,12 @@ private fun SessionTaskPane(
                 text = ThinkingMessage
             )
         }
-        ?: preferredCurrentTaskResponse
+        ?: latestFinalPhaseMessage?.takeIf { !it.text.isNullOrBlank() }
+        ?: alignmentMessage
     val isFinalCheckResponse = finalCheckDisplayMessage != null
+    val isAlignmentResponse = interactionResponse === alignmentMessage
+    val isFixedResponse = interactionResponse?.text == ThinkingMessage ||
+        (isAlignmentResponse && alignmentState !is AlignmentDisplayState.NeedsInput)
 
     LaunchedEffect(messages.size, finalCheckMessage, taskCheckMessage) {
         if (finalCheckMessage != null) {
@@ -588,9 +584,9 @@ private fun SessionTaskPane(
             }
         }
     }
-    val comparableResponseText = remember(taskResponse) {
-        taskResponse?.takeIf { it.kind == TaskResponseKind.Clarification }
-            ?.text
+    val comparableResponseText = remember(alignmentState) {
+        (alignmentState as? AlignmentDisplayState.NeedsInput)
+            ?.message
             ?.trim()
             ?.takeIf { it.isNotBlank() }
     }
@@ -689,8 +685,9 @@ private fun SessionTaskPane(
                                             ?: NoFinalCheckIssuesMessage,
                                         kind = when {
                                             isTaskCheckResponse || isFinalCheckResponse -> TaskResponseKind.Detail
-                                            alignmentState is AlignmentDisplayState.NeedsInput ->
+                                            isAlignmentResponse && alignmentState is AlignmentDisplayState.NeedsInput ->
                                                 TaskResponseKind.Clarification
+                                            isFixedResponse -> TaskResponseKind.Status
                                             else -> TaskResponseKind.Detail
                                         }
                                     )
@@ -766,35 +763,6 @@ private fun SessionTaskPane(
                     }
                     )
                 }
-                if (diffResponse?.response?.isNotBlank() == true) {
-                    item {
-                        InfoCard(
-                            title = "Suggested summary",
-                            modifier = Modifier.fillMaxWidth(),
-                            action = {
-                                OutlinedButton(
-                                    onClick = {
-                                        project?.let {
-                                            project.sendNotificationToShoakuServer { server ->
-                                                server.applyDiff(
-                                                    ApplyDiffParams(diffResponse.shoakuId, diffResponse.response)
-                                                )
-                                            }
-                                        }
-                                        session.shoakuId?.let { shoakuId ->
-                                            viewModel.diffResponses.remove(shoakuId)
-                                        }
-                                    },
-                                    enabled = filePath.isNotBlank()
-                                ) {
-                                    Text("Apply")
-                                }
-                            }
-                        ) {
-                            Text(diffResponse.diff, color = TodoColors.infoText)
-                        }
-                    }
-                }
             }
             Column(
                 modifier = Modifier
@@ -819,9 +787,9 @@ private fun SessionTaskPane(
                     ConversationHistoryHeader(
                         expanded = conversationExpanded,
                         onExpandedChange = onConversationExpandedChange,
+                        label = activeItem?.content ?: ReviewTaskTitle,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(7.dp))
                             .background(TodoColors.taskResponseSurface)
                             .padding(horizontal = 10.dp, vertical = 9.dp)
                     )
@@ -832,7 +800,7 @@ private fun SessionTaskPane(
 }
 
 private const val AlignmentGapMessageThreshold = 0.9
-private const val AlignmentFallbackMessage = "Clarify the task direction below."
+private const val AlignmentInSyncMessage = "Aligned with goal."
 private const val ThinkingMessage = "Thinking"
 private const val ReviewTaskTitle = "Final Check"
 private const val NoFinalCheckIssuesMessage = "No issues found."
@@ -907,11 +875,6 @@ private fun TaskListCard(
                     color = TodoColors.secondaryText,
                     style = JewelTheme.defaultTextStyle
                 )
-                Text(
-                    text = "Add checklist items in the goals file.",
-                    color = TodoColors.disabledText,
-                    style = JewelTheme.defaultTextStyle
-                )
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -947,6 +910,9 @@ private fun TaskListCard(
                     state = TaskItemState.Pending,
                     kind = TaskRowKind.FinalCheck,
                     enabled = false,
+                    actionLabel = "Review",
+                    onActionClick = onReviewClick,
+                    actionEnabled = false,
                     attachedContent = currentTaskContent.takeIf { todoItems.isEmpty() }
                 )
             }
@@ -1421,7 +1387,7 @@ private fun ConversationEntry(
             index == 0 -> 4.dp
             startsNewTurn -> 14.dp
             previousIsSameSpeaker -> 4.dp
-            else -> 8.dp
+            else -> 12.dp
         }
     )
 }
@@ -1435,88 +1401,12 @@ internal fun alignmentDisplayState(messages: List<Message>): AlignmentDisplaySta
     if (latestScoredAgentMessage.phase != "final_answer") {
         return AlignmentDisplayState.Checking
     }
-    if (alignmentScore >= AlignmentGapMessageThreshold) {
+    val responseText = latestScoredAgentMessage.text?.trim().takeUnless { it.isNullOrEmpty() }
+    if (alignmentScore >= AlignmentGapMessageThreshold || responseText == null) {
         return AlignmentDisplayState.InSync
     }
-    return AlignmentDisplayState.NeedsInput(
-        latestScoredAgentMessage.text?.trim().takeUnless { it.isNullOrEmpty() }
-            ?: AlignmentFallbackMessage
-    )
+    return AlignmentDisplayState.NeedsInput(responseText)
 }
-
-internal fun compactConversationMessages(messages: List<Message>): List<Message> {
-    val checkpointIndex = messages.indexOfLast {
-        it.type == "agentMessage" &&
-            it.phase == "final_answer" &&
-            it.alignmentScore != null
-    }
-    val checkpoint = messages.getOrNull(checkpointIndex)
-    val startsWithQuestion =
-        checkpoint?.alignmentScore?.let { it < AlignmentGapMessageThreshold } == true
-    val relevant = messages.drop(
-        when {
-            checkpointIndex < 0 -> 0
-            startsWithQuestion -> checkpointIndex
-            else -> checkpointIndex + 1
-        }
-    ).filter(::isConversationMessage)
-
-    if (relevant.isEmpty()) {
-        return emptyList()
-    }
-
-    if (startsWithQuestion) {
-        val question = relevant.first()
-        val latestUserIndex = relevant.indexOfLast { it.type == "userMessage" }
-        if (latestUserIndex < 0) {
-            return listOf(question)
-        }
-        val latestAgentAfterUser = relevant
-            .drop(latestUserIndex + 1)
-            .lastOrNull { it.type == "agentMessage" }
-        return buildList {
-            add(question)
-            add(relevant[latestUserIndex])
-            latestAgentAfterUser?.let(::add)
-        }.distinct()
-    }
-
-    val latestUserIndex = relevant.indexOfLast { it.type == "userMessage" }
-    if (latestUserIndex < 0) {
-        return relevant.takeLast(1)
-    }
-    val latestAgentAfterUser = relevant
-        .drop(latestUserIndex + 1)
-        .lastOrNull { it.type == "agentMessage" }
-    return buildList {
-        add(relevant[latestUserIndex])
-        latestAgentAfterUser?.let(::add)
-    }
-}
-
-internal fun conversationWithoutCheckResult(
-    messages: List<Message>,
-    checkResult: Message?
-): List<Message> {
-    if (checkResult == null) {
-        return messages
-    }
-    return messages.filterNot { message ->
-        message === checkResult ||
-            (message.turnId != null && message.turnId == checkResult.turnId)
-    }
-}
-
-internal fun preferredTaskResponse(
-    conversation: List<Message>,
-    taskCheckResult: Message?
-): Message? =
-    taskCheckResult ?: conversation.lastOrNull { message ->
-        message.type == "agentMessage" &&
-            message.command.isNullOrBlank() &&
-            !message.text.isNullOrBlank() &&
-            message.phase != "final_check"
-    }
 
 private fun isConversationMessage(message: Message): Boolean =
     message.command.isNullOrBlank() &&
@@ -2309,7 +2199,18 @@ private fun ChatEntryRow(
                             .padding(horizontal = 12.dp, vertical = 10.dp)
                     )
                 } else {
-                    AgentMessageContent(message = message)
+                    AgentMessageContent(
+                        message = message,
+                        style = TextStyle(
+                            color = if (message == ThinkingMessage) {
+                                TodoColors.secondaryText
+                            } else {
+                                TodoColors.infoText
+                            },
+                            fontSize = 13.sp,
+                            lineHeight = 21.sp
+                        )
+                    )
                 }
             }
         }
@@ -3312,14 +3213,5 @@ private fun sampleShoakuViewModel() = ShoakuViewModel().apply {
             ),
             shoakuId = "shoaku-preview-3"
         )
-    )
-    diffResponses["shoaku-preview-1"] = ShowDiffParams(
-        shoakuId = "shoaku-preview-1",
-        response = "- Extract common setup\n- Reuse validated command sequence",
-        diff = """
-            - a
-            +  - a-a
-            - b
-        """.trimIndent()
     )
 }
