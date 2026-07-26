@@ -22,7 +22,8 @@ class ShoakuSettings : PersistentStateComponent<ShoakuSettings.State> {
     data class State(
         var filePath: String = "",
         var openSessionIds: MutableList<String> = mutableListOf(),
-        var selectedSessionId: String? = null
+        var selectedSessionId: String? = null,
+        var goalFilter: GoalFilter = GoalFilter.All
     )
 }
 

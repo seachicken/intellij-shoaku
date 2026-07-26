@@ -88,16 +88,19 @@ class GoalsWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
+        val settings = project.service<ShoakuSettings>()
+        settings.viewModel.goalFilter = settings.state.goalFilter
+
         toolWindow.addComposeTab(focusOnClickInside = true) {
             LaunchedEffect(Unit) {
                 // initial data loading
             }
             MyToolWindowContent(
-                project.service<ShoakuSettings>().viewModel,
-                project.service<ShoakuSettings>().state,
+                settings.viewModel,
+                settings.state,
                 project,
-                initialOpenSessionKeys = project.service<ShoakuSettings>().state.openSessionIds.map(::SessionKey),
-                initialSelectedSessionKey = project.service<ShoakuSettings>().state.selectedSessionId?.let(::SessionKey),
+                initialOpenSessionKeys = settings.state.openSessionIds.map(::SessionKey),
+                initialSelectedSessionKey = settings.state.selectedSessionId?.let(::SessionKey),
                 onFilePathChange = { newPath ->
                     project.sendNotificationToShoakuServer {
                         it.didChangeGoalsFilePath(DidChangeGoalsFilePath(newPath))
@@ -154,6 +157,15 @@ private fun MyToolWindowContent(
         state.selectedSessionId = key?.shoakuId
     }
 
+    LaunchedEffect(initialOpenSessionKeys) {
+        val currentProject = project ?: return@LaunchedEffect
+        initialOpenSessionKeys.forEach { key ->
+            currentProject.sendNotificationToShoakuServer { server ->
+                server.startSession(StartSessionParams(key.shoakuId))
+            }
+        }
+    }
+
     LaunchedEffect(goals, vm.hasReceivedGoals) {
         if (!vm.hasReceivedGoals) {
             return@LaunchedEffect
@@ -196,7 +208,10 @@ private fun MyToolWindowContent(
                 filePathState = filePathState,
                 project = project,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-                onFilterChange = { vm.goalFilter = it },
+                onFilterChange = {
+                    vm.goalFilter = it
+                    state.goalFilter = it
+                },
                 onOpenSession = { session ->
                     if (session.shoakuId == null) {
                         return@SessionListContent
