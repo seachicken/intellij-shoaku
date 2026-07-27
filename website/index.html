@@ -3,15 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Shoaku is an understanding-first IntelliJ workflow that helps you stay in control of the code you ship.">
+  <meta name="description" content="Shoaku is an IntelliJ AI coding assistant plugin powered by Codex CLI. Explore solutions in parallel, compare implementations, and understand the code you ship.">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
   <meta name="theme-color" content="#f7f6fb">
-  <title>Shoaku — Understand the code you ship.</title>
+  <title>Shoaku | IntelliJ AI Coding Assistant Plugin</title>
   <link rel="canonical" href="https://seachicken.github.io/intellij-shoaku/">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://seachicken.github.io/intellij-shoaku/">
   <meta property="og:site_name" content="Shoaku">
-  <meta property="og:title" content="Shoaku — Understand the code you ship.">
-  <meta property="og:description" content="An understanding-first IntelliJ workflow that helps you stay in control of the code you ship.">
+  <meta property="og:title" content="Shoaku | IntelliJ AI Coding Assistant Plugin">
+  <meta property="og:description" content="An IntelliJ plugin powered by Codex CLI for exploring solutions in parallel and comparing implementations before you ship.">
   <meta property="og:image" content="https://seachicken.github.io/intellij-shoaku/images/og-image.webp">
   <meta property="og:image:secure_url" content="https://seachicken.github.io/intellij-shoaku/images/og-image.webp">
   <meta property="og:image:type" content="image/webp">
@@ -19,12 +20,35 @@
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="Shoaku plugin running in IntelliJ IDEA">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Shoaku — Understand the code you ship.">
-  <meta name="twitter:description" content="An understanding-first IntelliJ workflow that helps you stay in control of the code you ship.">
+  <meta name="twitter:title" content="Shoaku | IntelliJ AI Coding Assistant Plugin">
+  <meta name="twitter:description" content="An IntelliJ plugin powered by Codex CLI for exploring solutions in parallel and comparing implementations before you ship.">
   <meta name="twitter:image" content="https://seachicken.github.io/intellij-shoaku/images/og-image.webp">
   <meta name="twitter:image:alt" content="Shoaku plugin running in IntelliJ IDEA">
   <link rel="icon" href="logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Shoaku",
+      "alternateName": "Shoaku - Understanding-First Coding",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "IntelliJ IDEA plugin",
+      "operatingSystem": "IntelliJ IDEA",
+      "description": "An IntelliJ AI coding assistant plugin powered by Codex CLI. Shoaku helps developers explore solutions in parallel and compare implementations before shipping code.",
+      "url": "https://seachicken.github.io/intellij-shoaku/",
+      "downloadUrl": "https://plugins.jetbrains.com/plugin/32426-shoaku--understanding-first-coding",
+      "softwareVersion": "0.3.1",
+      "image": "https://seachicken.github.io/intellij-shoaku/images/og-image.webp",
+      "sameAs": "https://github.com/seachicken/intellij-shoaku",
+      "featureList": [
+        "Goal-based coding workflow in IntelliJ IDEA",
+        "Parallel AI exploration using Codex CLI",
+        "Side-by-side implementation comparison"
+      ],
+      "softwareRequirements": "Codex CLI and Node.js 22 or later"
+    }
+  </script>
 </head>
 <body>
   <header class="site-header">
@@ -43,7 +67,7 @@
     <section class="hero wrap">
       <div class="eyebrow"><span></span> Understanding-first coding for IntelliJ</div>
       <h1>Understand the code<br><em>you ship.</em></h1>
-      <p class="hero-copy">Shoaku is an IntelliJ plugin that keeps understanding at the center of development.<br>You keep thinking and coding while an agent quietly explores another approach.</p>
+      <p class="hero-copy">Shoaku is an IntelliJ AI coding assistant plugin powered by Codex CLI.<br>You keep thinking and coding while an agent quietly explores another approach.</p>
       <div class="hero-actions">
         <a class="button primary" href="https://plugins.jetbrains.com/plugin/32426-shoaku--understanding-first-coding" target="_blank" rel="noreferrer">Install for IntelliJ <span>↗</span></a>
         <a class="button secondary" href="#how">See how it works <span>↓</span></a>
@@ -113,6 +137,30 @@
       </article>
     </section>
 
+    <section class="details wrap" aria-labelledby="details-title">
+      <div class="section-heading">
+        <div>
+          <div class="section-label">INTELLIJ AI CODING ASSISTANT</div>
+          <h2 id="details-title">A coding workflow built for understanding.</h2>
+        </div>
+        <p>Shoaku is designed for developers who want AI assistance without losing ownership of their code.</p>
+      </div>
+      <div class="details-grid">
+        <article>
+          <h3>What is Shoaku?</h3>
+          <p>Shoaku is an open-source plugin for IntelliJ IDEA. It uses Codex CLI to investigate and implement a goal in a separate workspace while you work in your own.</p>
+        </article>
+        <article>
+          <h3>How does it help with AI-assisted coding?</h3>
+          <p>At the end of a task, Shoaku lets you compare your implementation with the agent's work. The comparison helps reveal trade-offs, gaps, and useful alternatives before you merge or ship.</p>
+        </article>
+        <article>
+          <h3>What do I need to use it?</h3>
+          <p>Install Shoaku from JetBrains Marketplace, then configure Codex CLI and Node.js 22 or later in your development environment.</p>
+        </article>
+      </div>
+    </section>
+
     <section class="demo wrap" aria-labelledby="demo-title">
       <div class="demo-heading">
         <div>
@@ -134,7 +182,7 @@
       <div class="section-label light">START WITH SHOAKU</div>
       <h2>Build useful software.<br><em>Understand what you ship.</em></h2>
       <p>Bring Shoaku into your IntelliJ workflow and stay close to every decision.</p>
-      <a class="button light-button" href="https://plugins.jetbrains.com/plugin/32426-shoaku--understanding-first-coding" target="_blank" rel="noreferrer">Install for IntelliJ <span>↗</span></a>
+      <a class="button light-button" href="https://plugins.jetbrains.com/plugin/32426-shoaku--understanding-first-coding" target="_blank" rel="noopener noreferrer">Install for IntelliJ <span>↗</span></a>
       <small>Requires Codex CLI &amp; Node.js 22+</small>
     </section>
   </main>

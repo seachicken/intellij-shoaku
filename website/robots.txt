@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://seachicken.github.io/intellij-shoaku/sitemap.xml
