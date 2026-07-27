@@ -82,6 +82,7 @@ data class Item(
     val checked: Boolean? = null,
     val children: List<Item> = emptyList(),
     val shoakuId: String? = null,
+    val sessionId: String? = null,
     val messages: List<Message>? = emptyList(),
     val tokenUsage: TokenUsageUi? = null,
     val status: AgentStatusUi? = null,

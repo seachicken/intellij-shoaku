@@ -407,6 +407,7 @@ async function syncShoakuLists(filePath) {
 
   for (const goal of lists) {
     if (goal.shoakuId) {
+      goal.sessionId = shoakuToSession.get(goal.shoakuId)?.navigatorThreadId;
       goal.messages = chatByShoakuId.get(goal.shoakuId)?.messages;
       goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage;
       goal.status = chatByShoakuId.get(goal.shoakuId)?.status;

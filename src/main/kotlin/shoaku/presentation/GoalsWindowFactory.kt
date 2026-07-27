@@ -48,6 +48,7 @@ import androidx.compose.ui.window.PopupProperties
 import com.intellij.ide.BrowserUtil
 import com.intellij.notification.Notification
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
@@ -81,6 +82,7 @@ import shoaku.StartFinalCheckParams
 import shoaku.StartSessionParams
 import shoaku.TokenUsageUi
 import java.text.NumberFormat
+import java.awt.datatransfer.StringSelection
 import java.util.*
 import kotlin.collections.first
 
@@ -704,18 +706,22 @@ private fun SessionTaskPane(
                     TaskListCard(
                     todoItems = todoItems,
                     activeItemIndex = activeItemIndex,
-                    currentTaskActionLabel = "Review",
-                    currentTaskActionEnabled =
+                    reviewCurrentTaskEnabled =
                         session.shoakuId != null &&
                             !taskCheckThinking &&
                             session.status?.navigator?.equals("active", ignoreCase = true) != true,
-                    onCurrentTaskActionClick = {
+                    copyImplementationCommandEnabled = !session.sessionId.isNullOrBlank(),
+                    onReviewCurrentTask = {
                         taskCheckState.requested.value = true
                         taskCheckState.thinking.value = true
                         taskCheckState.startMessageCount.value = messages.size
                         project?.sendNotificationToShoakuServer { server ->
                             server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
                         }
+                    },
+                    onCopyImplementationCommand = {
+                        val task = activeItem?.content ?: return@TaskListCard
+                        copyImplementationForkCommand(session.sessionId, task)
                     },
                     currentTaskContent = {
                         TaskTimelineNode {
@@ -907,9 +913,10 @@ private enum class TaskRowKind {
 private fun TaskListCard(
     todoItems: List<Item>,
     activeItemIndex: Int,
-    currentTaskActionLabel: String,
-    currentTaskActionEnabled: Boolean,
-    onCurrentTaskActionClick: () -> Unit,
+    reviewCurrentTaskEnabled: Boolean,
+    copyImplementationCommandEnabled: Boolean,
+    onReviewCurrentTask: () -> Unit,
+    onCopyImplementationCommand: () -> Unit,
     currentTaskContent: @Composable ColumnScope.() -> Unit,
     reviewEnabled: Boolean,
     finalCheckActive: Boolean,
@@ -945,9 +952,16 @@ private fun TaskListCard(
                 TaskListRow(
                     title = model.content,
                     state = state,
-                    actionLabel = currentTaskActionLabel.takeIf { state == TaskItemState.Current },
-                    onActionClick = onCurrentTaskActionClick.takeIf { state == TaskItemState.Current },
-                    actionEnabled = currentTaskActionEnabled,
+                    actionContent = if (state == TaskItemState.Current) {
+                        {
+                            TaskActionSelector(
+                                reviewEnabled = reviewCurrentTaskEnabled,
+                                copyCommandEnabled = copyImplementationCommandEnabled,
+                                onReview = onReviewCurrentTask,
+                                onCopyCommand = onCopyImplementationCommand
+                            )
+                        }
+                    } else null,
                     attachedContent = currentTaskContent.takeIf { state == TaskItemState.Current }
                 )
             }
@@ -991,6 +1005,7 @@ private fun TaskListRow(
     actionLabel: String? = null,
     onActionClick: (() -> Unit)? = null,
     actionEnabled: Boolean = true,
+    actionContent: (@Composable () -> Unit)? = null,
     attachedContent: (@Composable ColumnScope.() -> Unit)? = null,
     enabled: Boolean = true,
     modifier: Modifier = Modifier
@@ -1035,7 +1050,9 @@ private fun TaskListRow(
                     ),
                     modifier = Modifier.weight(1f)
                 )
-                if (actionLabel != null) {
+                if (actionContent != null) {
+                    actionContent()
+                } else if (actionLabel != null) {
                     DefaultButton(
                         onClick = { onActionClick?.invoke() },
                         enabled = enabled && actionEnabled && onActionClick != null,
@@ -1991,6 +2008,12 @@ private fun sendSessionReply(
     }
 }
 
+private fun copyImplementationForkCommand(sessionId: String?, task: String) {
+    if (sessionId.isNullOrBlank()) return
+    val escapedTask = task.replace("'", "'\\\"'\\\"'")
+    CopyPasteManager.getInstance().setContents(StringSelection("codex fork $sessionId 'Implement: $escapedTask'"))
+}
+
 private fun TextFieldValue.insertNewline(): TextFieldValue {
     val start = selection.min
     val end = selection.max
@@ -2744,6 +2767,68 @@ private fun GoalFilterButton(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskActionSelector(
+    reviewEnabled: Boolean,
+    copyCommandEnabled: Boolean,
+    onReview: () -> Unit,
+    onCopyCommand: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val menuInteractionSource = remember { MutableInteractionSource() }
+    val menuHovered by menuInteractionSource.collectIsHoveredAsState()
+
+    Box(modifier = modifier.wrapContentWidth()) {
+        Text(
+            text = "⋯",
+            color = if (menuHovered || expanded) TodoColors.primaryText else TodoColors.secondaryText,
+            fontSize = 16.sp,
+            modifier = Modifier
+                .hoverable(menuInteractionSource)
+                .clickable(interactionSource = menuInteractionSource, indication = null) { expanded = !expanded }
+                .padding(horizontal = 4.dp, vertical = 0.dp)
+        )
+
+        if (expanded) {
+            PopupMenu(
+                onDismissRequest = {
+                    expanded = false
+                    true
+                },
+                horizontalAlignment = Alignment.End
+            ) {
+                selectableItem(
+                    selected = false,
+                    iconKey = AllIconsKeys.Actions.Preview,
+                    onClick = {
+                        if (reviewEnabled) onReview()
+                        expanded = false
+                    }
+                ) {
+                    Text(
+                        text = "Review this task",
+                        color = if (reviewEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
+                    )
+                }
+                selectableItem(
+                    selected = false,
+                    iconKey = AllIconsKeys.Actions.Copy,
+                    onClick = {
+                        if (copyCommandEnabled) onCopyCommand()
+                        expanded = false
+                    }
+                ) {
+                    Text(
+                        text = "Copy implementation command",
+                        color = if (copyCommandEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
+                    )
                 }
             }
         }
