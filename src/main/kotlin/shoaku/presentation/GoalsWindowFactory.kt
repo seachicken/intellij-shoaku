@@ -1306,11 +1306,6 @@ private fun ConversationComposerNode(
         }
     }
     val historyItemCount = visibleMessages.size + if (replyThinking) 1 else 0
-    LaunchedEffect(expanded, historyItemCount) {
-        if (expanded && historyItemCount > 0) {
-            historyListState.scrollToItem(historyItemCount - 1)
-        }
-    }
     val nodeShape = RoundedCornerShape(7.dp)
     Column(
         modifier = modifier
