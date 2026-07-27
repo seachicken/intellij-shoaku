@@ -601,7 +601,7 @@ private fun SessionTaskPane(
         ?: alignmentMessage
     val isFinalCheckResponse = finalCheckDisplayMessage != null
     val isAlignmentResponse = interactionResponse === alignmentMessage
-    val isFixedResponse = interactionResponse?.text == ThinkingMessage ||
+    val isFixedResponse = interactionResponse?.text?.let(::isFixedResponseText) == true ||
         (isAlignmentResponse && alignmentState !is AlignmentDisplayState.NeedsInput)
 
     LaunchedEffect(messages.size, finalCheckMessage, taskCheckMessage) {
@@ -837,6 +837,9 @@ private const val AlignmentInSyncMessage = "Aligned with goal."
 private const val ThinkingMessage = "Thinking"
 private const val ReviewTaskTitle = "Final Check"
 private const val NoFinalCheckIssuesMessage = "No issues found."
+
+private fun isFixedResponseText(message: String) =
+    message == ThinkingMessage || message == NoFinalCheckIssuesMessage
 
 private class FinalCheckDisplayState {
     val requested = mutableStateOf(false)
@@ -1448,9 +1451,9 @@ private fun isConversationMessage(message: Message): Boolean =
         message.phase != "final_check"
 
 private fun isVisibleChatMessage(message: Message): Boolean =
-    message.type in setOf("contextCompaction", "contextCompactionStarted") ||
-        message.command?.isNotBlank() == true ||
-        message.text?.isNotBlank() == true
+    message.type == "agentMessage" &&
+        message.phase == "final_answer" &&
+        !message.text.isNullOrBlank()
 
 private fun finalCheckResponse(messages: List<Message>): Message? =
     messages.lastOrNull {
@@ -2236,15 +2239,7 @@ private fun ChatEntryRow(
                 } else {
                     AgentMessageContent(
                         message = message,
-                        style = TextStyle(
-                            color = if (message == ThinkingMessage) {
-                                TodoColors.secondaryText
-                            } else {
-                                TodoColors.infoText
-                            },
-                            fontSize = 13.sp,
-                            lineHeight = 21.sp
-                        )
+                        style = agentMessageTextStyle(message)
                     )
                 }
             }
@@ -2266,11 +2261,7 @@ private fun ChatTurnDivider() {
 private fun AgentMessageContent(
     message: String,
     onLinkClick: ((String) -> Unit)? = null,
-    style: TextStyle = TextStyle(
-        color = TodoColors.infoText,
-        fontSize = 13.sp,
-        lineHeight = 21.sp
-    )
+    style: TextStyle = agentMessageTextStyle(message)
 ) {
     val blocks = remember(message) { parseAgentMessageBlocks(message) }
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -2327,6 +2318,12 @@ private fun AgentMessageContent(
         }
     }
 }
+
+private fun agentMessageTextStyle(message: String) = TextStyle(
+    color = if (isFixedResponseText(message)) TodoColors.secondaryText else TodoColors.infoText,
+    fontSize = 13.sp,
+    lineHeight = 21.sp
+)
 
 private sealed interface AgentMessageBlock {
     data class Paragraph(val text: String) : AgentMessageBlock
