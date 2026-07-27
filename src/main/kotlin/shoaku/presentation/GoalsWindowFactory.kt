@@ -645,6 +645,10 @@ private fun SessionTaskPane(
     }
 
     val outerListState = rememberLazyListState()
+    val outerScrollScope = rememberCoroutineScope()
+    val showHistoryScrollHint by remember(outerListState, conversationExpanded) {
+        derivedStateOf { conversationExpanded && outerListState.canScrollForward }
+    }
     var tasksViewportTop by remember { mutableStateOf(Float.NEGATIVE_INFINITY) }
     var conversationHeaderTop by remember { mutableStateOf(Float.POSITIVE_INFINITY) }
     val stickyHeaderThreshold = with(LocalDensity.current) { 2.dp.toPx() }
@@ -831,6 +835,19 @@ private fun SessionTaskPane(
                             .background(TodoColors.taskResponseSurface)
                             .padding(horizontal = 10.dp, vertical = 9.dp)
                     )
+                }
+            }
+            if (showHistoryScrollHint) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 10.dp, bottom = 10.dp)
+                ) {
+                    ScrollHintButton {
+                        outerScrollScope.launch {
+                            outerListState.scrollToItem(0, Int.MAX_VALUE)
+                        }
+                    }
                 }
             }
         }
@@ -1304,7 +1321,6 @@ private fun ConversationComposerNode(
     onSend: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val historyListState = rememberLazyListState()
     val visibleMessages = remember(messages) {
         messages.filter { message ->
             isVisibleChatMessage(message)
@@ -1363,14 +1379,12 @@ private fun ConversationComposerNode(
             }
         }
         if (expanded && historyItemCount > 0) {
-            ScrollHintLazyColumn(
-                state = historyListState,
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 160.dp, max = 520.dp),
-                contentPadding = PaddingValues(vertical = 8.dp)
+                    .padding(vertical = 8.dp)
             ) {
-                itemsIndexed(visibleMessages) { index, entry ->
+                visibleMessages.forEachIndexed { index, entry ->
                     ConversationEntry(
                         messages = visibleMessages,
                         index = index,
@@ -1378,13 +1392,11 @@ private fun ConversationComposerNode(
                     )
                 }
                 if (replyThinking) {
-                    item {
-                        ChatEntryRow(
-                            entry = Message(type = "agentMessage", text = ThinkingMessage),
-                            showTurnDivider = false,
-                            topSpacing = if (visibleMessages.isEmpty()) 4.dp else 8.dp
-                        )
-                    }
+                    ChatEntryRow(
+                        entry = Message(type = "agentMessage", text = ThinkingMessage),
+                        showTurnDivider = false,
+                        topSpacing = if (visibleMessages.isEmpty()) 4.dp else 8.dp
+                    )
                 }
             }
         }
@@ -1394,7 +1406,8 @@ private fun ConversationComposerNode(
             enabled = enabled,
             placeholder = placeholder,
             onSend = onSend,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
         )
     }
 }
@@ -2136,7 +2149,6 @@ private fun ScrollHintLazyColumn(
                 lastVisible.offset + lastVisible.size > layoutInfo.viewportEndOffset
         }
     }
-
     Box(modifier = modifier) {
         LazyColumn(
             state = state,
@@ -2156,34 +2168,37 @@ private fun ScrollHintLazyColumn(
                 .align(Alignment.BottomEnd)
                 .padding(end = 10.dp, bottom = 10.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(28.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(TodoColors.scrollHintSurface)
-                    .border(1.dp, TodoColors.scrollHintBorder, RoundedCornerShape(999.dp))
-                    .clickable(
-                        indication = null,
-                        interactionSource = remember { MutableInteractionSource() }
-                    ) {
-                        val lastIndex = state.layoutInfo.totalItemsCount - 1
-                        if (lastIndex >= 0) {
-                            scope.launch {
-                                state.animateScrollToItem(lastIndex)
-                            }
-                        }
-                    }
-                    .padding(bottom = 1.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "↓",
-                    color = TodoColors.scrollHintContent,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+            ScrollHintButton {
+                val lastIndex = state.layoutInfo.totalItemsCount - 1
+                if (lastIndex >= 0) {
+                    scope.launch { state.animateScrollToItem(lastIndex) }
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ScrollHintButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(TodoColors.scrollHintSurface)
+            .border(1.dp, TodoColors.scrollHintBorder, RoundedCornerShape(999.dp))
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }
+            ) { onClick() }
+            .padding(bottom = 1.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "↓",
+            color = TodoColors.scrollHintContent,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold
+        )
     }
 }
 
