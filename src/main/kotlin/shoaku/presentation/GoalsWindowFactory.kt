@@ -1451,9 +1451,9 @@ private fun isConversationMessage(message: Message): Boolean =
         message.phase != "final_check"
 
 private fun isVisibleChatMessage(message: Message): Boolean =
-    message.type == "agentMessage" &&
-        message.phase == "final_answer" &&
-        !message.text.isNullOrBlank()
+    message.type in setOf("contextCompaction", "contextCompactionStarted") ||
+        message.command?.isNotBlank() == true ||
+        message.text?.isNotBlank() == true
 
 private fun finalCheckResponse(messages: List<Message>): Message? =
     messages.lastOrNull {
