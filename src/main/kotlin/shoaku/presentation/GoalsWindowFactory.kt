@@ -157,7 +157,12 @@ private fun MyToolWindowContent(
         state.selectedSessionId = key?.shoakuId
     }
 
-    LaunchedEffect(initialOpenSessionKeys) {
+    LaunchedEffect(initialOpenSessionKeys, vm.hasReceivedGoals) {
+        // The language server is guaranteed to be available only after its first sync.
+        // Sending this during initial composition can happen before the server starts.
+        if (!vm.hasReceivedGoals) {
+            return@LaunchedEffect
+        }
         val currentProject = project ?: return@LaunchedEffect
         initialOpenSessionKeys.forEach { key ->
             currentProject.sendNotificationToShoakuServer { server ->
