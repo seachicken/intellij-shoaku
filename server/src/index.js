@@ -399,7 +399,9 @@ async function syncShoakuLists(filePath) {
     const content = await readFile(filePath, { encoding: 'utf8' });
     lists = parser.parse(content);
   } catch (e) {
-    if (e.code !== 'ENOENT') {
+    if (e.code === 'EPERM') {
+      logWarn('Access to the Goals file is restricted. On macOS, please allow access in System Settings > Privacy & Security > Files and Folders.');
+    } else if (e.code !== 'ENOENT') {
       throw e;
     }
     lists = [];
