@@ -8,6 +8,8 @@ import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.ClickableText
@@ -46,45 +48,27 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.intellij.ide.BrowserUtil
-import com.intellij.notification.Notification
-import com.intellij.notification.NotificationType
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.ui.JBColor
-import com.intellij.util.ui.JBUI
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
-import org.jetbrains.jewel.bridge.JewelComposePanel
 import org.jetbrains.jewel.bridge.addComposeTab
 import org.jetbrains.jewel.foundation.theme.JewelTheme
 import org.jetbrains.jewel.ui.component.*
 import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icon.PathIconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
-import shoaku.AgentStatusUi
-import shoaku.AppLanguageServer
-import shoaku.DidChangeGoalsFilePath
-import shoaku.GoalFilter
-import shoaku.Item
-import shoaku.LanguageServerProvider
-import shoaku.Message
-import shoaku.ReplyParams
-import shoaku.ReviewComment
-import shoaku.ShoakuSettings
-import shoaku.ShoakuViewModel
-import shoaku.StartFinalCheckParams
-import shoaku.StartSessionParams
-import shoaku.TokenUsageUi
-import java.text.NumberFormat
+import shoaku.*
 import java.awt.datatransfer.StringSelection
+import java.text.NumberFormat
 import java.util.*
-import kotlin.collections.first
 
 class GoalsWindowFactory : ToolWindowFactory {
     override fun shouldBeAvailable(project: Project) = true
@@ -562,6 +546,11 @@ private fun SessionTaskPane(
         FinalCheckDisplayState()
     }
     val replyState = remember(session.shoakuId) { ReplyDisplayState() }
+    val replyMessage = remember(messages, replyState.startMessageCount.value) {
+        replyState.startMessageCount.value?.let { startMessageCount ->
+            finalCheckResponse(messages.drop(startMessageCount))
+        }
+    }
     val taskCheckMessage = remember(messages, taskCheckState.startMessageCount.value) {
         taskCheckState.startMessageCount.value?.let { startMessageCount ->
             finalCheckResponse(messages.drop(startMessageCount))
@@ -572,6 +561,15 @@ private fun SessionTaskPane(
     val taskCheckRequested = taskCheckState.requested.value
     val taskCheckThinking = taskCheckState.thinking.value
     val replyThinking = replyState.thinking.value
+    val replyDisplayMessage = when {
+        replyThinking -> Message(
+            type = "agentMessage",
+            phase = "final_answer",
+            text = ThinkingMessage
+        )
+        replyState.startMessageCount.value != null -> replyMessage
+        else -> null
+    }
     val taskCheckDisplayMessage = when {
         taskCheckThinking -> Message(
             type = "agentMessage",
@@ -596,14 +594,9 @@ private fun SessionTaskPane(
         )
         else -> finalCheckMessage
     }
-    val interactionResponse = finalCheckDisplayMessage
+    val interactionResponse = replyDisplayMessage
+        ?: finalCheckDisplayMessage
         ?: taskCheckDisplayMessage
-        ?: replyThinking.takeIf { it }?.let {
-            Message(
-                type = "agentMessage",
-                text = ThinkingMessage
-            )
-        }
         ?: latestFinalPhaseMessage?.takeIf { !it.text.isNullOrBlank() }
         ?: alignmentMessage
     val isFinalCheckResponse = finalCheckDisplayMessage != null
@@ -639,20 +632,22 @@ private fun SessionTaskPane(
         if (previousResponseText == null || previousResponseText == nextResponseText) {
             return@LaunchedEffect
         }
-
-        project?.let {
-            Notification("Shoaku", nextResponseText, NotificationType.INFORMATION)
-                .notify(it)
-        }
     }
 
     val outerListState = rememberLazyListState()
     val outerScrollScope = rememberCoroutineScope()
-    val showHistoryScrollHint by remember(outerListState, conversationExpanded) {
-        derivedStateOf { conversationExpanded && outerListState.canScrollForward }
-    }
+    val composerBringIntoViewRequester = remember { BringIntoViewRequester() }
+    var composerScrollOffset by remember(session.shoakuId, messages.size) { mutableStateOf<Int?>(null) }
     var tasksViewportTop by remember { mutableStateOf(Float.NEGATIVE_INFINITY) }
     var conversationHeaderTop by remember { mutableStateOf(Float.POSITIVE_INFINITY) }
+    val showHistoryScrollHint by remember(outerListState, conversationExpanded, composerScrollOffset) {
+        derivedStateOf {
+            conversationExpanded &&
+                outerListState.canScrollForward &&
+                (composerScrollOffset == null ||
+                    outerListState.firstVisibleItemScrollOffset < composerScrollOffset!!)
+        }
+    }
     val stickyHeaderThreshold = with(LocalDensity.current) { 2.dp.toPx() }
     Column(
         modifier = modifier
@@ -712,6 +707,8 @@ private fun SessionTaskPane(
                             session.status?.navigator?.equals("active", ignoreCase = true) != true,
                     copyImplementationCommandEnabled = !session.sessionId.isNullOrBlank(),
                     onReviewCurrentTask = {
+                        replyState.startMessageCount.value = null
+                        replyState.thinking.value = false
                         taskCheckState.requested.value = true
                         taskCheckState.thinking.value = true
                         taskCheckState.startMessageCount.value = messages.size
@@ -767,6 +764,7 @@ private fun SessionTaskPane(
                                 expanded = conversationExpanded,
                                 onExpandedChange = onConversationExpandedChange,
                                 onHeaderPositioned = { conversationHeaderTop = it },
+                                composerBringIntoViewRequester = composerBringIntoViewRequester,
                                 instructionValue = instructionValue,
                                 onInstructionValueChange = onInstructionValueChange,
                                 enabled = session.shoakuId != null,
@@ -802,6 +800,8 @@ private fun SessionTaskPane(
                         finalCheckMessage
                     },
                     onReviewClick = {
+                        replyState.startMessageCount.value = null
+                        replyState.thinking.value = false
                         finalCheckState.requested.value = true
                         finalCheckState.thinking.value = true
                         finalCheckState.startMessageCount.value = messages.size
@@ -851,7 +851,8 @@ private fun SessionTaskPane(
                 ) {
                     ScrollHintButton {
                         outerScrollScope.launch {
-                            outerListState.scrollToItem(0, Int.MAX_VALUE)
+                            composerBringIntoViewRequester.bringIntoView()
+                            composerScrollOffset = outerListState.firstVisibleItemScrollOffset
                         }
                     }
                 }
@@ -1331,6 +1332,7 @@ private fun ConversationComposerNode(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     onHeaderPositioned: (Float) -> Unit,
+    composerBringIntoViewRequester: BringIntoViewRequester,
     instructionValue: TextFieldValue,
     onInstructionValueChange: (TextFieldValue) -> Unit,
     enabled: Boolean,
@@ -1425,6 +1427,7 @@ private fun ConversationComposerNode(
             onSend = onSend,
             modifier = Modifier
                 .fillMaxWidth()
+                .bringIntoViewRequester(composerBringIntoViewRequester)
         )
     }
 }
@@ -2784,6 +2787,8 @@ private fun TaskActionSelector(
     var expanded by remember { mutableStateOf(false) }
     val menuInteractionSource = remember { MutableInteractionSource() }
     val menuHovered by menuInteractionSource.collectIsHoveredAsState()
+    val reviewContentColor = if (reviewEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
+    val copyCommandContentColor = if (copyCommandEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
 
     Box(modifier = modifier.wrapContentWidth()) {
         Text(
@@ -2806,29 +2811,45 @@ private fun TaskActionSelector(
             ) {
                 selectableItem(
                     selected = false,
-                    iconKey = AllIconsKeys.Actions.Preview,
+                    iconKey = null,
                     onClick = {
                         if (reviewEnabled) onReview()
                         expanded = false
                     }
                 ) {
-                    Text(
-                        text = "Review this task",
-                        color = if (reviewEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            key = AllIconsKeys.Actions.Preview,
+                            contentDescription = null,
+                            tint = reviewContentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(text = "Review this task", color = reviewContentColor)
+                    }
                 }
                 selectableItem(
                     selected = false,
-                    iconKey = AllIconsKeys.Actions.Copy,
+                    iconKey = null,
                     onClick = {
                         if (copyCommandEnabled) onCopyCommand()
                         expanded = false
                     }
                 ) {
-                    Text(
-                        text = "Copy implementation command",
-                        color = if (copyCommandEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            key = AllIconsKeys.Actions.Copy,
+                            contentDescription = null,
+                            tint = copyCommandContentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(text = "Copy implementation command", color = copyCommandContentColor)
+                    }
                 }
             }
         }
