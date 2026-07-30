@@ -25,6 +25,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -521,6 +523,7 @@ private fun SessionTaskPane(
     val messages = session.messages.orEmpty()
     val hasConversationHistory = remember(messages) { messages.any(::isVisibleChatMessage) }
     val alignmentState = remember(messages) { alignmentDisplayState(messages) }
+    val alignmentScore = remember(messages) { latestFinalAlignmentScore(messages) }
     val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
         val base = session.tokenUsage ?: return@remember null
         val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
@@ -655,6 +658,21 @@ private fun SessionTaskPane(
             .padding(TodoMetrics.horizontalPadding),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        GoalProgressSummary(
+            alignmentState = alignmentState,
+            alignmentScore = alignmentScore,
+            tokenUsage = effectiveTokenUsage,
+            agentStatus = session.status,
+            onIncreaseTokenBudget = {
+                val shoakuId = session.shoakuId ?: return@GoalProgressSummary
+                val currentMax = effectiveTokenUsage?.maxTokens
+                    ?: session.tokenUsage?.maxTokens
+                    ?: return@GoalProgressSummary
+                val increment = (currentMax / 10f).toInt().coerceAtLeast(1)
+                viewModel.tokenBudgetOverrides[shoakuId] = currentMax + increment
+            },
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
         SessionSectionHeader(
             title = "Tasks",
             trailing = {
@@ -662,18 +680,6 @@ private fun SessionTaskPane(
                     text = "$remainingCount remaining",
                     fontSize = 11.sp,
                     color = TodoColors.secondaryText
-                )
-                TokenUsageIndicator(
-                    tokenUsage = effectiveTokenUsage,
-                    status = session.status,
-                    onIncreaseBudget = {
-                        val shoakuId = session.shoakuId ?: return@TokenUsageIndicator
-                        val currentMax = effectiveTokenUsage?.maxTokens
-                            ?: session.tokenUsage?.maxTokens
-                            ?: return@TokenUsageIndicator
-                        val increment = (currentMax / 10f).toInt().coerceAtLeast(1)
-                        viewModel.tokenBudgetOverrides[shoakuId] = currentMax + increment
-                    }
                 )
             }
         )
@@ -859,6 +865,184 @@ private fun SessionTaskPane(
             }
         }
     }
+}
+
+@Composable
+private fun GoalProgressSummary(
+    alignmentState: AlignmentDisplayState,
+    alignmentScore: Double?,
+    tokenUsage: TokenUsageUi?,
+    agentStatus: AgentStatusUi?,
+    onIncreaseTokenBudget: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val visualAlignment = alignmentScore?.toFloat()?.coerceIn(0f, 1f) ?: 0f
+    val alignmentColors = if (alignmentState is AlignmentDisplayState.NeedsInput) {
+        listOf(TodoColors.goalProgressUncertain, TodoColors.goalProgressUncertainEnd)
+    } else {
+        listOf(TodoColors.goalProgressCompleted, TodoColors.goalProgressCompletedEnd)
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(TodoColors.goalProgressSurface)
+            .border(1.dp, TodoColors.goalProgressBorder, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Goal alignment",
+                    color = TodoColors.primaryText,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                GoalAlignmentPill(alignmentState)
+            }
+            TokenUsageIndicator(
+                tokenUsage = tokenUsage,
+                status = agentStatus,
+                onIncreaseBudget = onIncreaseTokenBudget
+            )
+        }
+        GoalProgressBar(
+            progress = visualAlignment,
+            indicatorColors = alignmentColors,
+            checking = alignmentState is AlignmentDisplayState.Checking,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun GoalProgressBar(
+    progress: Float,
+    indicatorColors: List<Color>,
+    checking: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+        label = "goalAlignmentProgress"
+    )
+    val shimmerPosition = remember { Animatable(-0.35f) }
+
+    LaunchedEffect(checking) {
+        if (!checking) {
+            shimmerPosition.snapTo(-0.35f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            shimmerPosition.snapTo(-0.35f)
+            shimmerPosition.animateTo(
+                targetValue = 1.35f,
+                animationSpec = tween(durationMillis = 2800, easing = LinearEasing)
+            )
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .height(4.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(TodoColors.goalProgressTrack)
+    ) {
+        if (animatedProgress > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(animatedProgress)
+                    .fillMaxHeight()
+                    .background(Brush.horizontalGradient(indicatorColors))
+            )
+        }
+        if (checking) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .drawBehind {
+                        val centerX = size.width * shimmerPosition.value
+                        val halfWidth = size.width * 0.18f
+                        drawRect(
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    TodoColors.goalAlignmentShimmer,
+                                    Color.Transparent
+                                ),
+                                start = Offset(centerX - halfWidth, 0f),
+                                end = Offset(centerX + halfWidth, size.height)
+                            )
+                        )
+                    }
+            )
+        }
+    }
+}
+
+private enum class GoalProgressTone {
+    Aligned,
+    Neutral,
+    Attention
+}
+
+@Composable
+private fun GoalAlignmentPill(alignmentState: AlignmentDisplayState) {
+    val label: String
+    val tone: GoalProgressTone
+    when (alignmentState) {
+        AlignmentDisplayState.InSync -> {
+            label = "Aligned"
+            tone = GoalProgressTone.Aligned
+        }
+        AlignmentDisplayState.Checking -> {
+            label = "Checking alignment"
+            tone = GoalProgressTone.Neutral
+        }
+        is AlignmentDisplayState.NeedsInput -> {
+            label = "Needs alignment"
+            tone = GoalProgressTone.Attention
+        }
+        AlignmentDisplayState.Unavailable -> {
+            label = "Not assessed"
+            tone = GoalProgressTone.Neutral
+        }
+    }
+    GoalStatusPill(label = label, tone = tone)
+}
+
+@Composable
+private fun GoalStatusPill(
+    label: String,
+    tone: GoalProgressTone,
+    modifier: Modifier = Modifier
+) {
+    val accent = when (tone) {
+        GoalProgressTone.Aligned -> TodoColors.goalProgressCompleted
+        GoalProgressTone.Neutral -> TodoColors.secondaryText
+        GoalProgressTone.Attention -> TodoColors.goalProgressUncertain
+    }
+    Text(
+        text = label,
+        color = accent,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(accent.copy(alpha = 0.1f))
+            .border(1.dp, accent.copy(alpha = 0.32f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp)
+    )
 }
 
 private const val AlignmentGapMessageThreshold = 0.9
@@ -1476,6 +1660,13 @@ internal fun alignmentDisplayState(messages: List<Message>): AlignmentDisplaySta
     }
     return AlignmentDisplayState.NeedsInput(responseText)
 }
+
+private fun latestFinalAlignmentScore(messages: List<Message>): Double? =
+    messages.lastOrNull {
+        it.type == "agentMessage" &&
+            it.phase == "final_answer" &&
+            it.alignmentScore != null
+    }?.alignmentScore?.coerceIn(0.0, 1.0)
 
 private fun isConversationMessage(message: Message): Boolean =
     message.command.isNullOrBlank() &&
@@ -3068,6 +3259,14 @@ private object TodoColors {
     val infoText = namedColor("Editor.foreground", 0xFFD5DCE5, 0xFF253041)
     val sectionSurface = blend(panelBackground, listBackground, 0.78f)
     val sectionDivider = componentBorder.copy(alpha = 0.48f)
+    val goalProgressSurface = overlay(brandAccentPrimary.copy(alpha = 0.045f), sectionSurface)
+    val goalProgressBorder = componentBorder.copy(alpha = 0.46f)
+    val goalProgressTrack = componentBorder.copy(alpha = 0.24f)
+    val goalProgressCompleted = brandAccentPrimary
+    val goalProgressCompletedEnd = brandAccentSecondary
+    val goalProgressUncertain = namedColor("Actions.Yellow", 0xFFE2A93B, 0xFFB26A00)
+    val goalProgressUncertainEnd = blend(goalProgressUncertain, primaryText, 0.82f)
+    val goalAlignmentShimmer = primaryText.copy(alpha = 0.1f)
     val codeBlockChatSurface = namedColor("Editor.background", 0xFF1E1F22, 0xFFF4F7FB)
     val popupSurface = overlay(infoBackground.copy(alpha = 0.18f), blend(panelBackground, listBackground, 0.62f))
     val popupBorder = componentBorder.copy(alpha = 0.9f)
