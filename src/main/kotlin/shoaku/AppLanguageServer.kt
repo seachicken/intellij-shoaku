@@ -12,10 +12,10 @@ interface AppLanguageServer : LanguageServer {
     fun applyDiff(params: ApplyDiffParams)
     @JsonNotification("shoaku/reply")
     fun reply(params: ReplyParams)
+    @JsonNotification("shoaku/makeMeExplain")
+    fun makeMeExplain(params: MakeMeExplainParams)
     @JsonNotification("shoaku/startFinalCheck")
     fun startFinalCheck(params: StartFinalCheckParams)
-    @JsonNotification("shoaku/requestTaskGuidance")
-    fun requestTaskGuidance(params: RequestTaskGuidanceParams)
 }
 
 data class DidChangeGoalsFilePath(
@@ -29,6 +29,10 @@ data class StartSessionParams(
 data class ReplyParams(
     val shoakuId: String,
     val text: String
+)
+
+data class MakeMeExplainParams(
+    val shoakuId: String?
 )
 
 data class ApplyDiffParams(

@@ -761,7 +761,10 @@ private fun SessionTaskPane(
                         project != null &&
                             session.shoakuId != null &&
                             !taskGuidanceThinking &&
-                            session.status?.navigator?.equals("active", ignoreCase = true) != true,
+                            (
+                                taskCheckThinking ||
+                                    session.status?.navigator?.equals("active", ignoreCase = true) != true
+                                ),
                     chatEnabled = session.shoakuId != null,
                     reviewCurrentTaskEnabled =
                         session.shoakuId != null &&
@@ -790,11 +793,10 @@ private fun SessionTaskPane(
                         taskGuidanceState.startMessageCount.value = messages.size
                         replyState.startMessageCount.value = null
                         replyState.thinking.value = false
-                        requestTaskGuidance(
-                            project = project,
-                            shoakuId = session.shoakuId,
-                            mode = UnderstandingGuidanceMode
-                        )
+
+                        project?.sendNotificationToShoakuServer { server ->
+                            server.makeMeExplain(MakeMeExplainParams(session.shoakuId))
+                        }
                     },
                     showCurrentTaskContent = interactionResponse != null,
                     currentTaskContent = {
@@ -2357,25 +2359,6 @@ private fun sendSessionReply(
     }
 }
 
-private fun requestTaskGuidance(
-    project: Project?,
-    shoakuId: String?,
-    mode: String
-) {
-    if (project == null || shoakuId == null) {
-        return
-    }
-
-    project.sendNotificationToShoakuServer { server ->
-        server.requestTaskGuidance(
-            RequestTaskGuidanceParams(
-                shoakuId = shoakuId,
-                mode = mode
-            )
-        )
-    }
-}
-
 private fun copyImplementationForkCommand(sessionId: String?, task: String) {
     if (sessionId.isNullOrBlank()) return
     val escapedTask = task.replace("'", "'\\\"'\\\"'")
@@ -3238,11 +3221,11 @@ private fun TaskGuidanceActionBar(
                 )
             }
             Tooltip(
-                tooltip = { Text("Deepen understanding") }
+                tooltip = { Text("Check my understanding") }
             ) {
                 ToolbarIconButton(
                     iconKey = AllIconsKeys.Actions.IntentionBulb,
-                    contentDescription = "Deepen understanding",
+                    contentDescription = "Check my understanding",
                     enabled = enabled,
                     onClick = onDeepenUnderstanding
                 )

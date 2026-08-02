@@ -721,6 +721,26 @@ process.stdin.on('data', async (chunk) => {
           );
           break;
 
+        case 'shoaku/makeMeExplain':
+          await startTurn({
+            threadId: shoakuToSession.get(message.params.shoakuId).navigatorThreadId,
+            input: [
+              {
+                type: 'text',
+                text: [
+                  '[Shoaku:IGNORE]',
+                  'Ask thorough questions about anything the user seems to lack understanding of based on their previous actions, which could be why they are unable to complete the current task.'
+                ].join('\n')
+              }
+            ]}, {
+              onItemCompleted: async (id, params) => {
+                appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
+                await syncShoakuLists(initializeParams.initializationOptions.filePath);
+              }
+            }
+          );
+          break;
+
         case 'shoaku/startFinalCheck':
           await startTurn({
             threadId: shoakuToSession.get(message.params.shoakuId).navigatorThreadId,
