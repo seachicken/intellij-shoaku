@@ -190,7 +190,7 @@ async function startNewSession(goalItem) {
       await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir} -b ${shoakuId.replace('-', '/')}`);
       return sendAppRequest('thread/start', {
         cwd: workDir,
-        approvalPolicy: 'on-request',
+        approvalPolicy: 'never',
         sandbox: 'workspace-write'
       })
     })()
@@ -529,16 +529,13 @@ process.stdin.on('data', async (chunk) => {
                   text: [
                     '[Shoaku:IGNORE]',
                     'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9. Otherwise, return a blank.'
+                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9.'
                   ].join('\n')
                 }
               ],
               outputSchema: {
                 type: 'object',
                 properties: {
-                  text: {
-                    type: 'string'
-                  },
                   alignmentScore: {
                     description: [
                       'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
@@ -546,7 +543,7 @@ process.stdin.on('data', async (chunk) => {
                     type: 'number'
                   }
                 },
-                required: [ 'text', 'alignmentScore' ],
+                required: [ 'alignmentScore' ],
                 additionalProperties: false
               }
             }, {
@@ -607,16 +604,13 @@ process.stdin.on('data', async (chunk) => {
                   text: [
                     '[Shoaku:IGNORE]',
                     'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9. Otherwise, return a blank.'
+                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9.'
                   ].join('\n')
                 }
               ],
               outputSchema: {
                 type: 'object',
                 properties: {
-                  text: {
-                    type: 'string'
-                  },
                   alignmentScore: {
                     description: [
                       'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
@@ -624,7 +618,7 @@ process.stdin.on('data', async (chunk) => {
                     type: 'number'
                   }
                 },
-                required: [ 'text', 'alignmentScore' ],
+                required: [ 'alignmentScore' ],
                 additionalProperties: false
               }
             }, {
@@ -639,18 +633,14 @@ process.stdin.on('data', async (chunk) => {
                   await syncShoakuLists(initializeParams.initializationOptions.filePath);
 
                   if (response.alignmentScore >= 0.9) {
-                    startTurn({
+                    const used = (chatByShoakuId.get(input.shoakuId).tokenUsage.navigatorTokens || 0) - (chatByShoakuId.get(input.shoakuId).tokenUsage.explorerTokens || 0);
+                    await sendAppRequest('thread/goal/set', {
                       threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
-                      input: [
-                        {
-                          type: 'text',
-                          text: [
-                            '[Shoaku:IGNORE_ALL]',
-                            `Implement it autonomously to achieve the user's goal. User's goal: ${input.content}`
-                          ].join('\n')
-                        }
-                      ]}
-                    );
+                      objective: [
+                        `Implement it autonomously to achieve the user's goal. User's goal: ${input.content}`
+                      ].join('\n'),
+                      tokenBudget: chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens - used
+                    });
                   }
                 }
               }

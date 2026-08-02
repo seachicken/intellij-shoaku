@@ -14,6 +14,8 @@ interface AppLanguageServer : LanguageServer {
     fun reply(params: ReplyParams)
     @JsonNotification("shoaku/startFinalCheck")
     fun startFinalCheck(params: StartFinalCheckParams)
+    @JsonNotification("shoaku/requestTaskGuidance")
+    fun requestTaskGuidance(params: RequestTaskGuidanceParams)
 }
 
 data class DidChangeGoalsFilePath(
@@ -36,4 +38,9 @@ data class ApplyDiffParams(
 
 data class StartFinalCheckParams(
     val shoakuId: String?
+)
+
+data class RequestTaskGuidanceParams(
+    val shoakuId: String,
+    val mode: String
 )
