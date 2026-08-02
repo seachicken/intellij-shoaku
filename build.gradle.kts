@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.3.4"
+version = "0.4.0-beta.0"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -55,9 +55,9 @@ intellijPlatform {
         changeNotes = """
             <h2>Improvements</h2>
             <ul>
-                <li>Notify a message when the system restricts access to the Goals file</li>
-                <li>Remove unnecessary notifications</li>
-                <li>Tweak chat UI</li>
+                <li>Show goal alignment</li>
+                <li>Run Explorer via the goal API</li>
+                <li>Add "Check my understanding"</li>
             </ul>
         """.trimIndent()
     }
