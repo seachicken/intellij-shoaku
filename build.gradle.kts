@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.4.0"
+version = "0.4.1"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -53,11 +53,10 @@ intellijPlatform {
         }
 
         changeNotes = """
-            <h2>Improvements</h2>
+            <h2>Bug Fixes</h2>
             <ul>
-                <li>Show goal alignment</li>
-                <li>Run Explorer via the goal API</li>
-                <li>Add "Check my understanding"</li>
+                <li>Fix the switching of active goals</li>
+                <li>Remove explicit context compaction from being performed multiple times</li>
             </ul>
         """.trimIndent()
     }
