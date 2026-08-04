@@ -42,7 +42,7 @@ describe('AgentInputBuilder', () => {
   }
 
   beforeEach(() => {
-    builder = new AgentInputBuilder('/project/root', 1000, 10);
+    builder = new AgentInputBuilder('/project/root', 1000);
     mock.timers.enable({ apis: ['setTimeout'] });
   });
 
@@ -137,25 +137,6 @@ describe('AgentInputBuilder', () => {
     mock.timers.tick(1000);
 
     assert.strictEqual(callCnt, 1);
-  });
-
-  test('enables compaction when input tokens exceed the threshold', (t, done) => {
-    builder.onAgentInput((input, shouldCompact) => {
-      assert.strictEqual(shouldCompact, true);
-      setImmediate(done);
-    });
-
-    builder.ingest({
-      type: inputType.TOKEN_USAGE,
-      lastInputTokens: 10
-    });
-
-    builder.ingest({
-      type: inputType.GOAL,
-      content: goalChangeEvent
-    });
-
-    mock.timers.tick(1000);
   });
 });
 

@@ -12,7 +12,6 @@ import { renderSummary, renderSummaryDiff } from './diff-snippet.js';
 import { cleanupStaleBranches } from './git.js';
 import parser from './parser.js';
 
-const compactionTriggerTokens = 100_000;
 const exec = promisify(child_process.exec);
 const appServer = spawn('codex', ['app-server'], {
   stdio: ['pipe', 'pipe', 'pipe'],
@@ -493,16 +492,10 @@ process.stdin.on('data', async (chunk) => {
 
           cleanupStaleBranches(initializeParams.rootPath);
 
-          lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000, compactionTriggerTokens);
+          lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
           lspInputBuilder.onAgentInput(async (input, shouldCompact) => {
             if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
               return;
-            }
-
-            if (shouldCompact) {
-              await sendAppRequest('thread/compact/start', {
-                threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
-              });
             }
 
             await sendAppRequest('thread/inject_items', {
@@ -565,16 +558,10 @@ process.stdin.on('data', async (chunk) => {
             );
           });
 
-          goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000, compactionTriggerTokens);
+          goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
           goalInputBuilder.onAgentInput(async (input, shouldCompact) => {
             if (!input?.shoakuId || !shoakuToSession.has(input.shoakuId)) {
               return;
-            }
-
-            if (shouldCompact) {
-              await sendAppRequest('thread/compact/start', {
-                threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
-              });
             }
 
             await sendAppRequest('thread/inject_items', {
