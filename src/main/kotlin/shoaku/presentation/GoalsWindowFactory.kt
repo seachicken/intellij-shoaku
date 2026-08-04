@@ -1791,10 +1791,23 @@ private fun isConversationMessage(message: Message): Boolean =
         message.type in setOf("userMessage", "agentMessage") &&
         message.phase != "final_check"
 
+private fun isUnexpectedMessageType(type: String): Boolean =
+    type !in setOf(
+        "userMessage",
+        "agentMessage",
+        "commandExecution",
+        "webSearch",
+        "contextCompaction",
+        "contextCompactionStarted"
+    )
+
 private fun isVisibleChatMessage(message: Message): Boolean =
-    message.alignmentScore == null &&
+    // Reasoning items are frequent internal progress updates and add noise to the conversation.
+    message.type != "reasoning" &&
+        message.alignmentScore == null &&
         (
             message.type in setOf("contextCompaction", "contextCompactionStarted") ||
+                isUnexpectedMessageType(message.type) ||
                 message.command?.isNotBlank() == true ||
                 message.text?.isNotBlank() == true
             )
@@ -2582,7 +2595,11 @@ private fun ChatEntryRow(
     showTurnDivider: Boolean,
     topSpacing: Dp
 ) {
-    if (entry.command != null || entry.type in setOf("contextCompaction", "contextCompactionStarted")) {
+    if (
+        isUnexpectedMessageType(entry.type) ||
+            entry.command != null ||
+            entry.type in setOf("contextCompaction", "contextCompactionStarted")
+    ) {
         ChatActivityRow(
             entry = entry,
             showTurnDivider = showTurnDivider,
@@ -3079,6 +3096,7 @@ private fun ChatActivityRow(
     val activityLabel = when (entry.type) {
         "contextCompactionStarted" -> "Compacting context"
         "contextCompaction" -> "Compacted context"
+        else if (isUnexpectedMessageType(entry.type)) -> "Ran ${entry.type}"
         else -> {
             val command = entry.command ?: return
             val verb = if (entry.type == "webSearch") "Searched" else "Ran"
