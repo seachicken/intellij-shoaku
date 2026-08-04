@@ -32,7 +32,6 @@ class ShoakuViewModel {
     var hasReceivedGoals by mutableStateOf(false)
     var goalFilter by mutableStateOf(GoalFilter.All)
     var selectedReviewLocation by mutableStateOf<ReviewLocation?>(null)
-    val diffResponses = mutableStateMapOf<String, ShowDiffParams>()
     val tokenBudgetOverrides = mutableStateMapOf<String, Int>()
 }
 

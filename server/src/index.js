@@ -32,7 +32,6 @@ let lspInputBuilder;
 let goalInputBuilder;
 let lists = [];
 let activeGoalItem;
-let prevGoalItem;
 
 let appBuf = Buffer.alloc(0);
 appServer.stdout.on('data', async (chunk) => {
@@ -388,6 +387,7 @@ async function resumeSession(shoakuId) {
           appendChatHistory(sessionToShoaku.get(navigatorThreadId), turn.id, item);
         }
       }
+      activeGoalItem = findItemByShoakuId(lists, shoakuId);
       await syncShoakuLists(initializeParams.initializationOptions.filePath);
     });
   }
@@ -488,7 +488,6 @@ process.stdin.on('data', async (chunk) => {
 
           initializeParams = message.params;
           await syncShoakuLists(initializeParams.initializationOptions.filePath);
-          activeGoalItem = findActiveParentItem(lists);
 
           cleanupStaleBranches(initializeParams.rootPath);
 
@@ -808,7 +807,6 @@ async function watchGoalsFileUpdates() {
 
       await syncShoakuLists(filePath);
 
-      activeGoalItem = findActiveParentItem(lists);
       if (goalInputBuilder && activeGoalItem) {
         const { messages, tokenUsage, status, ...content } = activeGoalItem;
         goalInputBuilder.ingest({
@@ -821,71 +819,6 @@ async function watchGoalsFileUpdates() {
         if (item.checked === false && !item.shoakuId) {
           await startNewSession(item);
         }
-      }
-
-      if (prevGoalItem?.checked === false && prevGoalItem.shoakuId) {
-        const currentGoalItem = findItemByShoakuId(lists, prevGoalItem.shoakuId);
-        if (currentGoalItem && currentGoalItem.shoakuId === prevGoalItem?.shoakuId && currentGoalItem.checked && !prevGoalItem.checked) {
-          const navigatorThreadId = shoakuToSession.get(currentGoalItem.shoakuId).navigatorThreadId;
-          if (!navigatorThreadId) {
-            logError(`No active session found for shoakuId ${currentGoalItem.shoakuId}`);
-            return;
-          }
-
-          await startTurn({
-            threadId: navigatorThreadId,
-            input: [
-              {
-                type: 'text',
-                text: [
-                  '[Shoaku:IGNORE_ALL]',
-                  'Summarize the threads according to the following:',
-                  '- Prioritize keeping decisions made only within the thread.',
-                  '- Summarize into about three points; if there are no key points, omit them.',
-                ].join('\n')
-              }
-            ],
-            outputSchema: {
-              type: 'object',
-              properties: {
-                summary: {
-                  type: 'array',
-                  items: { type: 'string' }
-                }
-              },
-              required: [ 'summary' ],
-              additionalProperties: false
-            }
-          }, {
-              onItemCompleted: async (id, params) => {
-                if (params.item.type !== 'agentMessage') {
-                  return;
-                }
-
-                try {
-                  const content = await readFile(initializeParams.initializationOptions.filePath, { encoding: 'utf8' });
-                  const shoakuId = sessionToShoaku.get(params.threadId);
-                  const diff = renderSummaryDiff(content, shoakuId, params.item.text, { unified: 2 });
-                  process.stdout.write(
-                    buildNotification('shoaku/showDiff', {
-                      shoakuId,
-                      response: params.item.text,
-                      diff
-                    })
-                  );
-                } catch (e) {
-                  if (e.code !== 'ENOENT') {
-                    throw e;
-                  }
-                }
-              }
-            }
-          );
-        }
-      }
-
-      if (activeGoalItem) {
-        prevGoalItem = activeGoalItem;
       }
     }
   } catch (err) {
@@ -901,20 +834,6 @@ function findItemByShoakuId(lists, shoakuId) {
   }
 
   return lists.find((item) => item.shoakuId === shoakuId);
-}
-
-function findActiveParentItem(lists) {
-  if (!lists) {
-    return null;
-  }
-
-  for (const item of lists) {
-    if (item.checked === false) {
-      return item;
-    }
-  }
-
-  return null;
 }
 
 function findActiveItem(lists) {

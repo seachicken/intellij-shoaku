@@ -60,15 +60,6 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
                 hasReceivedGoals = true
             }
         }
-
-        @JsonNotification("shoaku/showDiff")
-        fun showDiff(params: ShowDiffParams) {
-            project.service<ShoakuSettings>().viewModel.apply {
-                if (params.response.isNotBlank()) {
-                    diffResponses[params.shoakuId] = params
-                }
-            }
-        }
     }
 }
 
@@ -114,10 +105,4 @@ data class TokenUsageUi(
 data class AgentStatusUi(
     val navigator: String? = null,
     val explorer: String? = null
-)
-
-data class ShowDiffParams(
-    val shoakuId: String,
-    val response: String,
-    val diff: String
 )
