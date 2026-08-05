@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.4.1"
+version = "0.4.2"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -55,8 +55,7 @@ intellijPlatform {
         changeNotes = """
             <h2>Bug Fixes</h2>
             <ul>
-                <li>Fix the switching of active goals</li>
-                <li>Remove explicit context compaction from being performed multiple times</li>
+                <li>Fix the error when the maximum token limit was exceeded</li>
             </ul>
         """.trimIndent()
     }
