@@ -16,6 +16,8 @@ interface AppLanguageServer : LanguageServer {
     fun makeMeExplain(params: MakeMeExplainParams)
     @JsonNotification("shoaku/startFinalCheck")
     fun startFinalCheck(params: StartFinalCheckParams)
+    @JsonNotification("shoaku/didChangeMaxTokens")
+    fun didChangeMaxTokens(params: DidChangeMaxTokens)
 }
 
 data class DidChangeGoalsFilePath(
@@ -47,4 +49,9 @@ data class StartFinalCheckParams(
 data class RequestTaskGuidanceParams(
     val shoakuId: String,
     val mode: String
+)
+
+data class DidChangeMaxTokens(
+    val shoakuId: String,
+    val tokens: Int
 )

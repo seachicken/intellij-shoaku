@@ -57,6 +57,7 @@ import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.ui.JBColor
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.ui.tooling.preview.Preview
 import org.jetbrains.jewel.bridge.addComposeTab
@@ -545,6 +546,22 @@ private fun SessionTaskPane(
         val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
         base.copy(maxTokens = overrideMax.coerceAtLeast(1))
     }
+    val requestedMaxTokens = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get)
+    LaunchedEffect(session.shoakuId, session.tokenUsage?.maxTokens, requestedMaxTokens) {
+        val shoakuId = session.shoakuId ?: return@LaunchedEffect
+        val requestedMax = requestedMaxTokens ?: return@LaunchedEffect
+
+        // The server value is authoritative once it catches up with the optimistic UI value.
+        if (session.tokenUsage?.maxTokens == requestedMax) {
+            viewModel.tokenBudgetOverrides.remove(shoakuId)
+            return@LaunchedEffect
+        }
+
+        delay(500)
+        project?.sendNotificationToShoakuServer {
+            it.didChangeMaxTokens(DidChangeMaxTokens(shoakuId, requestedMax))
+        }
+    }
     val finalCheckMessage = remember(messages, finalCheckState.startMessageCount.value) {
         finalCheckState.startMessageCount.value?.let { startMessageCount ->
             finalCheckResponse(messages.drop(startMessageCount))
@@ -700,7 +717,7 @@ private fun SessionTaskPane(
                 agentStatus = session.status,
                 onIncreaseTokenBudget = {
                     val shoakuId = session.shoakuId ?: return@GoalProgressSummary
-                    val currentMax = effectiveTokenUsage?.maxTokens
+                    val currentMax = viewModel.tokenBudgetOverrides[shoakuId]
                         ?: session.tokenUsage?.maxTokens
                         ?: return@GoalProgressSummary
                     val increment = (currentMax / 10f).toInt().coerceAtLeast(1)
@@ -1604,7 +1621,7 @@ private fun ExpandedConversationPane(
     modifier: Modifier = Modifier
 ) {
     val visibleMessages = remember(messages) {
-        messages.filter(::isVisibleChatMessage)
+        visibleChatMessages(messages)
     }
     val historyItemCount = visibleMessages.size + if (isThinking) 1 else 0
     val historyListState = rememberLazyListState()
@@ -1811,6 +1828,19 @@ private fun isVisibleChatMessage(message: Message): Boolean =
                 message.command?.isNotBlank() == true ||
                 message.text?.isNotBlank() == true
             )
+
+internal fun visibleChatMessages(messages: List<Message>): List<Message> {
+    val completedCompactionTurnIds = messages.asSequence()
+        .filter { it.type == "contextCompaction" }
+        .mapNotNull(Message::turnId)
+        .toSet()
+
+    return messages.filter { message ->
+        isVisibleChatMessage(message) &&
+            !(message.type == "contextCompactionStarted" &&
+                message.turnId in completedCompactionTurnIds)
+    }
+}
 
 internal fun latestTaskResponse(messages: List<Message>): Message? =
     messages.lastOrNull {

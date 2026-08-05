@@ -109,6 +109,7 @@ appServer.stdout.on('data', async (chunk) => {
 
         try {
           const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
+          metaData.maxTokens = usage.maxTokens;
           metaData.navigator.tokenUsage = usage.navigatorTokens;
           metaData.explorer.tokenUsage = usage.explorerTokens;
           await writeFile(join(sessionsDir, shoakuId, 'meta.json'), JSON.stringify(metaData, null, 2));
@@ -334,7 +335,7 @@ async function resumeSession(shoakuId) {
       explorer: ''
     },
     tokenUsage: {
-      maxTokens: config?.defaultTokenBudget || 0,
+      maxTokens: metaData.maxTokens || config?.defaultTokenBudget || 0,
       navigatorTokens: metaData.navigator.tokenUsage || 0,
       explorerTokens: metaData.explorer.tokenUsage || 0
     }
@@ -625,7 +626,7 @@ process.stdin.on('data', async (chunk) => {
                       objective: [
                         `Implement it autonomously to achieve the user's goal. User's goal: ${input.content}`
                       ].join('\n'),
-                      tokenBudget: chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens - used
+                      tokenBudget: Math.max(0, chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens - used)
                     });
                   }
                 }
@@ -783,6 +784,12 @@ process.stdin.on('data', async (chunk) => {
             }
           );
           break;
+
+        case 'shoaku/didChangeMaxTokens': {
+          const chat = chatByShoakuId.get(message.params.shoakuId);
+          chat.tokenUsage.maxTokens = message.params.tokens;
+          break;
+        }
       }
     }
   } catch (err) {
