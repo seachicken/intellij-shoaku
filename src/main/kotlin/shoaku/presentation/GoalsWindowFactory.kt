@@ -51,10 +51,10 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import org.jetbrains.plugins.terminal.TerminalToolWindowManager
 import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.ui.JBColor
 import kotlinx.coroutines.delay
@@ -67,7 +67,6 @@ import org.jetbrains.jewel.ui.icon.IconKey
 import org.jetbrains.jewel.ui.icon.PathIconKey
 import org.jetbrains.jewel.ui.icons.AllIconsKeys
 import shoaku.*
-import java.awt.datatransfer.StringSelection
 import java.text.NumberFormat
 import java.util.*
 
@@ -760,6 +759,38 @@ private fun SessionTaskPane(
                             enabled = session.shoakuId != null,
                             placeholder = replyPlaceholder,
                             onSend = sendReply,
+                            guidanceActionsEnabled =
+                                project != null &&
+                                    session.shoakuId != null &&
+                                    !taskGuidanceThinking,
+                            reviewCurrentTaskEnabled =
+                                session.shoakuId != null && !taskCheckThinking,
+                            runImplementationCommandEnabled = !session.sessionId.isNullOrBlank(),
+                            onReviewCurrentTask = {
+                                replyState.startMessageCount.value = null
+                                replyState.thinking.value = false
+                                taskCheckState.requested.value = true
+                                taskCheckState.thinking.value = true
+                                taskCheckState.startMessageCount.value = messages.size
+                                project?.sendNotificationToShoakuServer { server ->
+                                    server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
+                                }
+                            },
+                            onDeepenUnderstanding = {
+                                taskGuidanceState.requested.value = true
+                                taskGuidanceState.thinking.value = true
+                                taskGuidanceState.startMessageCount.value = messages.size
+                                replyState.startMessageCount.value = null
+                                replyState.thinking.value = false
+                                project?.sendNotificationToShoakuServer { server ->
+                                    server.makeMeExplain(MakeMeExplainParams(session.shoakuId))
+                                }
+                            },
+                            onRunImplementationCommand = {
+                                activeItem?.content?.let { task ->
+                                    runImplementationForkCommand(project, session.sessionId, task)
+                                }
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
                     }
@@ -777,17 +808,12 @@ private fun SessionTaskPane(
                     guidanceActionsEnabled =
                         project != null &&
                             session.shoakuId != null &&
-                            !taskGuidanceThinking &&
-                            (
-                                taskCheckThinking ||
-                                    session.status?.navigator?.equals("active", ignoreCase = true) != true
-                                ),
+                            !taskGuidanceThinking,
                     chatEnabled = session.shoakuId != null,
                     reviewCurrentTaskEnabled =
                         session.shoakuId != null &&
-                            !taskCheckThinking &&
-                            session.status?.navigator?.equals("active", ignoreCase = true) != true,
-                    copyImplementationCommandEnabled = !session.sessionId.isNullOrBlank(),
+                            !taskCheckThinking,
+                    runImplementationCommandEnabled = !session.sessionId.isNullOrBlank(),
                     onReviewCurrentTask = {
                         replyState.startMessageCount.value = null
                         replyState.thinking.value = false
@@ -798,9 +824,9 @@ private fun SessionTaskPane(
                             server.startFinalCheck(StartFinalCheckParams(session.shoakuId))
                         }
                     },
-                    onCopyImplementationCommand = {
+                    onRunImplementationCommand = {
                         val task = activeItem?.content ?: return@TaskListCard
-                        copyImplementationForkCommand(session.sessionId, task)
+                        runImplementationForkCommand(project, session.sessionId, task)
                     },
                     onOpenChat = { onConversationExpandedChange(true) },
                     onDeepenUnderstanding = {
@@ -1148,9 +1174,9 @@ private fun TaskListCard(
     guidanceActionsEnabled: Boolean,
     chatEnabled: Boolean,
     reviewCurrentTaskEnabled: Boolean,
-    copyImplementationCommandEnabled: Boolean,
+    runImplementationCommandEnabled: Boolean,
     onReviewCurrentTask: () -> Unit,
-    onCopyImplementationCommand: () -> Unit,
+    onRunImplementationCommand: () -> Unit,
     onOpenChat: () -> Unit,
     onDeepenUnderstanding: () -> Unit,
     showCurrentTaskContent: Boolean,
@@ -1196,11 +1222,11 @@ private fun TaskListCard(
                                 enabled = guidanceActionsEnabled,
                                 chatEnabled = chatEnabled,
                                 reviewEnabled = reviewCurrentTaskEnabled,
-                                copyCommandEnabled = copyImplementationCommandEnabled,
+                                runCommandEnabled = runImplementationCommandEnabled,
                                 onOpenChat = onOpenChat,
                                 onDeepenUnderstanding = onDeepenUnderstanding,
                                 onReview = onReviewCurrentTask,
-                                onCopyCommand = onCopyImplementationCommand
+                                onRunCommand = onRunImplementationCommand
                             )
                         }
                     } else null,
@@ -1618,6 +1644,12 @@ private fun ExpandedConversationPane(
     enabled: Boolean,
     placeholder: String,
     onSend: () -> Unit,
+    guidanceActionsEnabled: Boolean,
+    reviewCurrentTaskEnabled: Boolean,
+    runImplementationCommandEnabled: Boolean,
+    onReviewCurrentTask: () -> Unit,
+    onDeepenUnderstanding: () -> Unit,
+    onRunImplementationCommand: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val visibleMessages = remember(messages) {
@@ -1690,6 +1722,18 @@ private fun ExpandedConversationPane(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
+            )
+            TaskGuidanceActionBar(
+                visible = true,
+                enabled = guidanceActionsEnabled,
+                chatEnabled = false,
+                reviewEnabled = reviewCurrentTaskEnabled,
+                runCommandEnabled = runImplementationCommandEnabled,
+                onOpenChat = {},
+                onDeepenUnderstanding = onDeepenUnderstanding,
+                onReview = onReviewCurrentTask,
+                onRunCommand = onRunImplementationCommand,
+                showChatAction = false
             )
         }
         ScrollHintLazyColumn(
@@ -1859,7 +1903,10 @@ private fun TokenUsageIndicator(
     onIncreaseBudget: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val activity = remember(status) { activityFromStatus(status) }
+    val explorerBudgetExhausted = tokenUsage?.isExplorerTokenBudgetExhausted() == true
+    val activity = remember(status, explorerBudgetExhausted) {
+        activityFromStatus(status, explorerBudgetExhausted)
+    }
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
     val pressed by interactionSource.collectIsPressedAsState()
@@ -2172,11 +2219,23 @@ private fun TokenLegendItem(
             modifier = Modifier
                 .size(6.dp)
                 .clip(RoundedCornerShape(999.dp))
-                .background(color.copy(alpha = if (isRunning) 0.92f else 0.72f))
+                .background(
+                    color.copy(
+                        alpha = when {
+                            statusTone == AgentStatusTone.Disabled -> 0.28f
+                            isRunning -> 0.92f
+                            else -> 0.72f
+                        }
+                    )
+                )
         )
         Text(
             text = label,
-            color = if (isRunning) TodoColors.primaryText else TodoColors.popupSecondaryText,
+            color = when {
+                statusTone == AgentStatusTone.Disabled -> TodoColors.popupSecondaryText.copy(alpha = 0.55f)
+                isRunning -> TodoColors.primaryText
+                else -> TodoColors.popupSecondaryText
+            },
             fontSize = 11.sp,
             fontWeight = if (isRunning) FontWeight.Medium else FontWeight.Normal,
             modifier = Modifier.width(64.dp)
@@ -2210,16 +2269,19 @@ private fun StatusPill(
     val background = when (tone) {
         AgentStatusTone.Running -> TodoColors.statusRunningSurface(activityPulse = pulse)
         AgentStatusTone.Error -> TodoColors.statusError.copy(alpha = 0.16f)
+        AgentStatusTone.Disabled -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.12f)
         AgentStatusTone.Hidden -> Color.Transparent
     }
     val border = when (tone) {
         AgentStatusTone.Running -> TodoColors.statusRunningBorder(activityPulse = pulse)
         AgentStatusTone.Error -> TodoColors.statusError.copy(alpha = 0.42f)
+        AgentStatusTone.Disabled -> TodoColors.tokenUsageTrackBorder.copy(alpha = 0.4f)
         AgentStatusTone.Hidden -> Color.Transparent
     }
     val content = when (tone) {
         AgentStatusTone.Running -> TodoColors.statusRunningText
         AgentStatusTone.Error -> TodoColors.statusError
+        AgentStatusTone.Disabled -> TodoColors.popupSecondaryText.copy(alpha = 0.72f)
         AgentStatusTone.Hidden -> Color.Transparent
     }
 
@@ -2402,10 +2464,17 @@ private fun sendSessionReply(
     }
 }
 
-private fun copyImplementationForkCommand(sessionId: String?, task: String) {
+private fun runImplementationForkCommand(project: Project?, sessionId: String?, task: String) {
     if (sessionId.isNullOrBlank()) return
     val escapedTask = task.replace("'", "'\\\"'\\\"'")
-    CopyPasteManager.getInstance().setContents(StringSelection("codex fork $sessionId 'Implement: $escapedTask'"))
+    val command = "codex fork $sessionId 'Implement: $escapedTask'"
+    val workingDirectory = project?.basePath ?: return
+
+    runCatching {
+        val terminal = TerminalToolWindowManager.getInstance(project)
+            .createLocalShellWidget(workingDirectory, "Codex: Shoaku", true, true)
+        terminal.executeCommand(command)
+    }
 }
 
 private fun TextFieldValue.insertNewline(): TextFieldValue {
@@ -2725,6 +2794,7 @@ private fun AgentMessageContent(
                     items = block.items.map { (number, item) -> MarkdownListEntry(marker = "$number.", text = item) },
                     onLinkClick = onLinkClick
                 )
+                is AgentMessageBlock.Table -> MarkdownTable(block, onLinkClick)
                 is AgentMessageBlock.Quote -> Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -2818,6 +2888,7 @@ private sealed interface AgentMessageBlock {
     data class Code(val language: String?, val code: String) : AgentMessageBlock
     data class UnorderedList(val items: List<String>) : AgentMessageBlock
     data class OrderedList(val items: List<Pair<String, String>>) : AgentMessageBlock
+    data class Table(val headers: List<String>, val rows: List<List<String>>) : AgentMessageBlock
     data class Quote(val text: String) : AgentMessageBlock
     data object ThematicBreak : AgentMessageBlock
 }
@@ -2911,6 +2982,71 @@ private fun MarkdownListItem(
             onLinkClick = onLinkClick,
             modifier = Modifier.weight(1f)
         )
+    }
+}
+
+@Composable
+private fun MarkdownTable(
+    table: AgentMessageBlock.Table,
+    onLinkClick: ((String) -> Unit)? = null
+) {
+    val horizontalScroll = rememberScrollState()
+    val columnCount = maxOf(table.headers.size, table.rows.maxOfOrNull { it.size } ?: 0)
+    if (columnCount == 0) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(horizontalScroll)
+            .clip(RoundedCornerShape(7.dp))
+            .border(1.dp, TodoColors.codeBlockBorder, RoundedCornerShape(7.dp))
+    ) {
+        MarkdownTableRow(
+            cells = table.headers,
+            columnCount = columnCount,
+            header = true,
+            onLinkClick = onLinkClick
+        )
+        table.rows.forEach { row ->
+            MarkdownTableRow(
+                cells = row,
+                columnCount = columnCount,
+                onLinkClick = onLinkClick
+            )
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableRow(
+    cells: List<String>,
+    columnCount: Int,
+    header: Boolean = false,
+    onLinkClick: ((String) -> Unit)? = null
+) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        repeat(columnCount) { index ->
+            Box(
+                modifier = Modifier
+                    .width(140.dp)
+                    .background(
+                        if (header) TodoColors.codeBlockChatSurface else Color.Transparent
+                    )
+                    .border(1.dp, TodoColors.codeBlockBorder)
+                    .padding(horizontal = 9.dp, vertical = 7.dp)
+            ) {
+                MarkdownTextBlock(
+                    text = cells.getOrNull(index).orEmpty(),
+                    onLinkClick = onLinkClick,
+                    style = TextStyle(
+                        color = if (header) TodoColors.primaryText else TodoColors.infoText,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                        fontWeight = if (header) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                )
+            }
+        }
     }
 }
 
@@ -3024,6 +3160,18 @@ private fun parseAgentMessageBlocks(message: String): List<AgentMessageBlock> {
             continue
         }
 
+        if (index + 1 < lines.size && isMarkdownTableDelimiter(lines[index + 1])) {
+            val headers = splitMarkdownTableRow(lines[index])
+            index += 2
+            val rows = mutableListOf<List<String>>()
+            while (index < lines.size && isMarkdownTableRow(lines[index])) {
+                rows += splitMarkdownTableRow(lines[index])
+                index += 1
+            }
+            blocks += AgentMessageBlock.Table(headers, rows)
+            continue
+        }
+
         val paragraphLines = mutableListOf<String>()
         while (index < lines.size) {
             val current = lines[index].trim()
@@ -3034,7 +3182,8 @@ private fun parseAgentMessageBlocks(message: String): List<AgentMessageBlock> {
                 current.matches(Regex("^(#{1,6})\\s+.+$")) ||
                 current.matches(Regex("^[-*]\\s+.+$")) ||
                 current.matches(Regex("^\\d+\\.\\s+.+$")) ||
-                current.matches(Regex("^(-{3,}|\\*{3,})$"))
+                current.matches(Regex("^(-{3,}|\\*{3,})$")) ||
+                (index + 1 < lines.size && isMarkdownTableDelimiter(lines[index + 1]))
             ) break
             paragraphLines += lines[index]
             index += 1
@@ -3043,6 +3192,34 @@ private fun parseAgentMessageBlocks(message: String): List<AgentMessageBlock> {
     }
 
     return if (blocks.isEmpty()) listOf(AgentMessageBlock.Paragraph(message)) else blocks
+}
+
+private fun isMarkdownTableRow(line: String): Boolean =
+    line.trim().contains('|') && splitMarkdownTableRow(line).isNotEmpty()
+
+private fun isMarkdownTableDelimiter(line: String): Boolean {
+    val cells = splitMarkdownTableRow(line)
+    return cells.size >= 1 && cells.all { it.trim().matches(Regex("^:?-{3,}:?$")) }
+}
+
+private fun splitMarkdownTableRow(line: String): List<String> {
+    val content = line.trim().removePrefix("|").removeSuffix("|")
+    if (content.isBlank() || !content.contains('|')) return emptyList()
+    val cells = mutableListOf<String>()
+    val current = StringBuilder()
+    var escaped = false
+    content.forEach { character ->
+        when {
+            character == '|' && !escaped -> {
+                cells += current.toString().trim()
+                current.clear()
+            }
+            else -> current.append(character)
+        }
+        escaped = character == '\\' && !escaped
+    }
+    cells += current.toString().trim()
+    return cells.map { it.replace("\\|", "|") }
 }
 
 private fun buildMarkdownAnnotatedString(text: String): AnnotatedString = buildAnnotatedString {
@@ -3234,11 +3411,12 @@ private fun TaskGuidanceActionBar(
     enabled: Boolean,
     chatEnabled: Boolean,
     reviewEnabled: Boolean,
-    copyCommandEnabled: Boolean,
+    runCommandEnabled: Boolean,
     onOpenChat: () -> Unit,
     onDeepenUnderstanding: () -> Unit,
     onReview: () -> Unit,
-    onCopyCommand: () -> Unit,
+    onRunCommand: () -> Unit,
+    showChatAction: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -3258,15 +3436,17 @@ private fun TaskGuidanceActionBar(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Tooltip(
-                tooltip = { Text("Open chat") }
-            ) {
-                ToolbarIconButton(
-                    iconKey = AllIconsKeys.General.Balloon,
-                    contentDescription = "Open chat",
-                    enabled = chatEnabled,
-                    onClick = onOpenChat
-                )
+            if (showChatAction) {
+                Tooltip(
+                    tooltip = { Text("Open chat") }
+                ) {
+                    ToolbarIconButton(
+                        iconKey = AllIconsKeys.General.Balloon,
+                        contentDescription = "Open chat",
+                        enabled = chatEnabled,
+                        onClick = onOpenChat
+                    )
+                }
             }
             Tooltip(
                 tooltip = { Text("Check my understanding") }
@@ -3280,9 +3460,9 @@ private fun TaskGuidanceActionBar(
             }
             TaskActionSelector(
                 reviewEnabled = reviewEnabled,
-                copyCommandEnabled = copyCommandEnabled,
+                runCommandEnabled = runCommandEnabled,
                 onReview = onReview,
-                onCopyCommand = onCopyCommand,
+                onRunCommand = onRunCommand,
                 onExpandedChange = { menuExpanded = it }
             )
         }
@@ -3293,15 +3473,15 @@ private fun TaskGuidanceActionBar(
 @OptIn(ExperimentalFoundationApi::class)
 private fun TaskActionSelector(
     reviewEnabled: Boolean,
-    copyCommandEnabled: Boolean,
+    runCommandEnabled: Boolean,
     onReview: () -> Unit,
-    onCopyCommand: () -> Unit,
+    onRunCommand: () -> Unit,
     onExpandedChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
     val reviewContentColor = if (reviewEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
-    val copyCommandContentColor = if (copyCommandEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
+    val runCommandContentColor = if (runCommandEnabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.5f)
 
     Box(modifier = modifier.wrapContentWidth()) {
         Tooltip(
@@ -3353,7 +3533,7 @@ private fun TaskActionSelector(
                     selected = false,
                     iconKey = null,
                     onClick = {
-                        if (copyCommandEnabled) onCopyCommand()
+                        if (runCommandEnabled) onRunCommand()
                         expanded = false
                         onExpandedChange(false)
                     }
@@ -3363,12 +3543,12 @@ private fun TaskActionSelector(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            key = AllIconsKeys.Actions.Copy,
+                            key = AllIconsKeys.Actions.Forward,
                             contentDescription = null,
-                            tint = copyCommandContentColor,
+                            tint = runCommandContentColor,
                             modifier = Modifier.size(16.dp)
                         )
-                        Text(text = "Copy implementation command", color = copyCommandContentColor)
+                        Text(text = "Delegate implementation", color = runCommandContentColor)
                     }
                 }
             }
@@ -3709,9 +3889,16 @@ private data class AgentActivityState(
     val tone: AgentStatusTone
 )
 
-private fun activityFromStatus(status: AgentStatusUi?): List<AgentActivityState> {
+private fun activityFromStatus(
+    status: AgentStatusUi?,
+    explorerBudgetExhausted: Boolean = false
+): List<AgentActivityState> {
     val navigatorState = status?.navigator.toAgentStatusState()
-    val explorerState = status?.explorer.toAgentStatusState()
+    val explorerState = if (explorerBudgetExhausted) {
+        AgentStatusState("Budget exhausted", AgentStatusTone.Disabled, false)
+    } else {
+        status?.explorer.toAgentStatusState()
+    }
     return listOf(
         AgentActivityState(
             label = "Navigator",
@@ -3733,6 +3920,7 @@ private fun activityFromStatus(status: AgentStatusUi?): List<AgentActivityState>
 private enum class AgentStatusTone {
     Running,
     Error,
+    Disabled,
     Hidden
 }
 
@@ -3741,6 +3929,9 @@ private data class AgentStatusState(
     val tone: AgentStatusTone,
     val isRunning: Boolean
 )
+
+private fun TokenUsageUi.isExplorerTokenBudgetExhausted(): Boolean =
+    (navigatorTokens - explorerTokens).coerceAtLeast(0) >= maxTokens.coerceAtLeast(1)
 
 @Composable
 private fun statusPulse(): Float {

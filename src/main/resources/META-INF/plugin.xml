@@ -16,6 +16,7 @@
     <depends>com.intellij.modules.vcs</depends>
     <depends>com.intellij.modules.compose</depends>
     <depends>com.intellij.modules.lsp</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
 
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
