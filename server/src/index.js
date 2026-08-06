@@ -621,12 +621,18 @@ process.stdin.on('data', async (chunk) => {
 
                   if (response.alignmentScore >= 0.9) {
                     const used = (chatByShoakuId.get(input.shoakuId).tokenUsage.navigatorTokens || 0) - (chatByShoakuId.get(input.shoakuId).tokenUsage.explorerTokens || 0);
+                    const tokenBudget = chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens - used;
+                    if (tokenBudget <= 0) {
+                      logInfo(`Token budget exceeded for shoakuId ${input.shoakuId}. Used: ${used}, Max: ${chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens}`);
+                      return;
+                    }
+
                     await sendAppRequest('thread/goal/set', {
                       threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
                       objective: [
                         `Implement it autonomously to achieve the user's goal. User's goal: ${input.content}`
                       ].join('\n'),
-                      tokenBudget: Math.max(0, chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens - used)
+                      tokenBudget
                     });
                   }
                 }
