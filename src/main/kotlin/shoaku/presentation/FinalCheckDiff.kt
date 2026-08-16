@@ -17,12 +17,15 @@ import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.editor.event.CaretEvent
 import com.intellij.openapi.editor.event.CaretListener
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
 import shoaku.ReviewComment
 import shoaku.ShoakuSettings
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.WeakHashMap
 
 private data class ReviewDiffData(
@@ -102,6 +105,93 @@ internal fun openReviewDiff(
     )
     reviewDiffTabs[project] = ReviewDiffTabState(diffFile)
     fileEditorManager.openFile(diffFile, true)
+}
+
+private val DirectoryDiffExcludedNames = setOf(
+    ".git", ".shoaku", ".idea", ".gradle", "build", "out", "node_modules"
+)
+
+internal data class ProjectDirectoryFileDiff(
+    val path: String,
+    val projectText: String,
+    val explorerText: String
+)
+
+internal fun collectProjectDirectoryDiffs(projectRoot: Path, explorerRoot: Path): List<ProjectDirectoryFileDiff> {
+    if (!Files.isDirectory(projectRoot) || !Files.isDirectory(explorerRoot)) return emptyList()
+
+    fun filesByRelativePath(root: Path): Map<String, Path> {
+        val result = mutableMapOf<String, Path>()
+        Files.walk(root).use { paths ->
+            paths.filter(Files::isRegularFile)
+                .filter { path ->
+                    root.relativize(path).none { it.toString() in DirectoryDiffExcludedNames }
+                }
+                .forEach { path -> result[root.relativize(path).toString()] = path }
+        }
+        return result
+    }
+
+    val projectFiles = filesByRelativePath(projectRoot)
+    val explorerFiles = filesByRelativePath(explorerRoot)
+    return (projectFiles.keys + explorerFiles.keys).distinct().sorted().mapNotNull { relativePath ->
+        val projectFile = projectFiles[relativePath]
+        val explorerFile = explorerFiles[relativePath]
+        if (projectFile != null && explorerFile != null && Files.mismatch(projectFile, explorerFile) == -1L) {
+            return@mapNotNull null
+        }
+        val projectText = projectFile?.let { runCatching { Files.readString(it) }.getOrNull() }
+        val explorerText = explorerFile?.let { runCatching { Files.readString(it) }.getOrNull() }
+        if (projectText == null && projectFile != null) return@mapNotNull null
+        if (explorerText == null && explorerFile != null) return@mapNotNull null
+        ProjectDirectoryFileDiff(relativePath, projectText.orEmpty(), explorerText.orEmpty())
+    }
+}
+
+internal fun openProjectDirectoryDiff(project: Project, explorerTaskPath: String) {
+    val projectRoot = project.basePath?.let(Path::of) ?: return
+    val explorerRoot = runCatching { Path.of(explorerTaskPath) }.getOrNull() ?: return
+    ApplicationManager.getApplication().executeOnPooledThread {
+        val fileDiffs = collectProjectDirectoryDiffs(projectRoot, explorerRoot)
+        if (fileDiffs.isEmpty()) return@executeOnPooledThread
+        ApplicationManager.getApplication().invokeLater {
+            val contentFactory = DiffContentFactory.getInstance()
+            val requests = fileDiffs.map { fileDiff ->
+                val highlightFile = sequenceOf(
+                    projectRoot.resolve(fileDiff.path),
+                    explorerRoot.resolve(fileDiff.path)
+                ).mapNotNull { path ->
+                    LocalFileSystem.getInstance().refreshAndFindFileByPath(path.toString())
+                }.firstOrNull()
+                val fileType = FileTypeManager.getInstance()
+                    .getFileTypeByFileName(Path.of(fileDiff.path).fileName.toString())
+                SimpleDiffRequest(
+                    "Explorer: ${fileDiff.path}",
+                    highlightFile?.let { contentFactory.create(project, fileDiff.projectText, it) }
+                        ?: contentFactory.create(project, fileDiff.projectText, fileType),
+                    highlightFile?.let { contentFactory.create(project, fileDiff.explorerText, it) }
+                        ?: contentFactory.create(project, fileDiff.explorerText, fileType),
+                    "Project",
+                    "Explorer"
+                )
+            }
+            val fileEditorManager = FileEditorManager.getInstance(project)
+            reviewDiffTabs.remove(project)?.file?.let { previousFile ->
+                if (fileEditorManager.isFileOpen(previousFile)) fileEditorManager.closeFile(previousFile)
+            }
+            val diffFile = ChainDiffVirtualFile(SimpleDiffRequestChain(requests, 0), "Explorer Diff")
+            reviewDiffTabs[project] = ReviewDiffTabState(diffFile)
+            fileEditorManager.openFile(diffFile, true)
+        }
+    }
+}
+
+internal fun resolveTaskPatchPath(workspaceRoot: Path, requestedPatch: Path): Path? {
+    val allowedRoot = runCatching {
+        workspaceRoot.resolve(".shoaku/task-patches").toRealPath()
+    }.getOrNull() ?: return null
+    val patchPath = runCatching { requestedPatch.toRealPath() }.getOrNull() ?: return null
+    return patchPath.takeIf { it.startsWith(allowedRoot) && Files.isRegularFile(it) }
 }
 
 private data class ReviewTarget(val path: String, val line: Int?)

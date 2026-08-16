@@ -1,7 +1,9 @@
 package shoaku
 
 import org.eclipse.lsp4j.jsonrpc.services.JsonNotification
+import org.eclipse.lsp4j.jsonrpc.services.JsonRequest
 import org.eclipse.lsp4j.services.LanguageServer
+import java.util.concurrent.CompletableFuture
 
 interface AppLanguageServer : LanguageServer {
     @JsonNotification("shoaku/startSession")
@@ -14,10 +16,10 @@ interface AppLanguageServer : LanguageServer {
     fun reply(params: ReplyParams)
     @JsonNotification("shoaku/makeMeExplain")
     fun makeMeExplain(params: MakeMeExplainParams)
-    @JsonNotification("shoaku/startFinalCheck")
-    fun startFinalCheck(params: StartFinalCheckParams)
     @JsonNotification("shoaku/didChangeMaxTokens")
     fun didChangeMaxTokens(params: DidChangeMaxTokens)
+    @JsonRequest("shoaku/createDiff")
+    fun createDiff(params: CreateDiffParams): CompletableFuture<CreateDiffResult>
 }
 
 data class DidChangeGoalsFilePath(
@@ -42,8 +44,13 @@ data class ApplyDiffParams(
     val response: String
 )
 
-data class StartFinalCheckParams(
-    val shoakuId: String?
+data class CreateDiffParams(
+    val shoakuId: String,
+    val explorerTaskIndex: Int
+)
+
+data class CreateDiffResult(
+    val explorerTaskPath: String
 )
 
 data class RequestTaskGuidanceParams(

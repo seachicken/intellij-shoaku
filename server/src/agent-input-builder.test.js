@@ -88,12 +88,12 @@ describe('AgentInputBuilder', () => {
 
   test('builds goal change operations after debounce', (t, done) => {
     builder.onAgentInput((input) => {
-      assert.strictEqual(input, goalChangeEvent);
+      assert.deepStrictEqual(countChangeLines(input), { added: 19, removed: 0 });
       setImmediate(done);
     });
 
     builder.ingest({
-      type: inputType.GOAL,
+      type: inputType.GOAL_HUMAN,
       content: goalChangeEvent
     });
 
@@ -107,7 +107,7 @@ describe('AgentInputBuilder', () => {
     });
 
     builder.ingest({
-      type: inputType.GOAL,
+      type: inputType.GOAL_HUMAN,
       content: goalChangeEvent
     });
 
@@ -116,27 +116,93 @@ describe('AgentInputBuilder', () => {
     assert.strictEqual(callCnt, 0);
   });
 
-  test('does not build goal change operations when active goal has not changed', (t) => {
+  test('builds goal add operation', async () => {
+    let resolveInput;
+    const waitForInput = () => new Promise((resolve) => {
+      resolveInput = resolve;
+    });
+
+    builder.onAgentInput((input) => {
+      resolveInput(input);
+    });
+
+    builder.ingest({
+      type: inputType.GOAL_HUMAN,
+      content: goalChangeEvent
+    });
+
+    let wait = waitForInput();
+    mock.timers.tick(1000);
+    await wait;
+
+    let content = structuredClone(goalChangeEvent);
+    content.children.push(
+      {
+        type: 'text',
+        content: 'Task 2',
+        line: 2,
+        children: []
+      }
+    );
+    builder.ingest({
+      type: inputType.GOAL_HUMAN,
+      content
+    });
+
+    wait = waitForInput();
+    mock.timers.tick(1000);
+    const input = await wait;
+
+    assert.deepStrictEqual(countChangeLines(input), { added: 6, removed: 0 });
+  });
+
+  test('does not build goal change operations when active goal has not changed', async () => {
     let callCnt = 0;
+    let resolveInput;
+    const waitForInput = () => new Promise((resolve) => {
+      resolveInput = resolve;
+    });
+
     builder.onAgentInput((input) => {
       callCnt++;
+      resolveInput(input);
     });
 
     builder.ingest({
-      type: inputType.GOAL,
+      type: inputType.GOAL_HUMAN,
+      content: goalChangeEvent
+    });
+
+    let wait = waitForInput();
+    mock.timers.tick(1000);
+    await wait;
+
+    builder.ingest({
+      type: inputType.GOAL_HUMAN,
       content: goalChangeEvent
     });
 
     mock.timers.tick(1000);
-
-    builder.ingest({
-      type: inputType.GOAL,
-      content: goalChangeEvent
-    });
-
-    mock.timers.tick(1000);
+    await Promise.resolve();
 
     assert.strictEqual(callCnt, 1);
   });
 });
+
+function countChangeLines(diff) {
+  let result = {
+    added: 0,
+    removed: 0
+  };
+  const lines = diff.split('\n');
+  for (const line of lines) {
+    if (line.startsWith('+ ')) {
+      result.added++;
+    }
+    if (line.startsWith('- ')) {
+      result.removed++;
+    }
+  }
+  return result;
+}
 

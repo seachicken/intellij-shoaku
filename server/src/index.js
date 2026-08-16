@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
 import { homedir } from 'node:os';
-import { mkdir, mkdtemp, readFile, watch, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { mkdir, mkdtemp, readFile, rm, stat, watch, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import child_process, { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -187,6 +187,20 @@ async function startNewSession(goalItem) {
     (async () => {
       logInfo(`Created temporary work directory: ${workDir}`)
       await exec(`git -C ${initializeParams.rootPath} worktree add ${workDir} -b ${shoakuId.replace('-', '/')}`);
+
+      const data = [
+        `# ${goalItem.content}`,
+      ].join('\n');
+      const shoakuDir = join(workDir, '.shoaku');
+      await mkdir(shoakuDir, { recursive: true });
+      const goalsPath = join(shoakuDir, 'goals.md');
+      await writeFile(goalsPath, data, { flag: 'wx' }).catch((e) => {
+        if (e.code !== 'EEXIST') {
+          throw e;
+        }
+      });
+      watchExplorerGoalsFileUpdates(goalsPath);
+
       return sendAppRequest('thread/start', {
         cwd: workDir,
         approvalPolicy: 'never',
@@ -252,11 +266,32 @@ async function startNewSession(goalItem) {
             {
               type: 'input_text',
               text: [
-                'You can understand what the users wants to achieve and implement it autonomously.',
+                'You can understand what the user wants to achieve and implement it autonomously.',
                 '',
                 'Responsibilities:',
                 '- Understand the user\'s overall goals and short-term tasks from their TODO list.',
                 '- Independently generate code to achieve the user\'s goals.',
+                '',
+                'Plan and patch workflow:',
+                '- The server has already created ".shoaku/goals.md" in this workspace. Read and edit that existing file as the authoritative implementation plan.',
+                '- Do not create, delete, rename, or replace .shoaku/goals.md. Preserve its existing goal heading and edit the same file in place.',
+                '- Before changing code, add the complete plan to the existing goals.md as a Markdown checklist.',
+                '- Do not use an internal plan or another plan file as a substitute for updating .shoaku/goals.md.',
+                '- Keep goals.md as a plain Markdown checklist. Do not add task IDs, human-task-name metadata, or task-mapping HTML comments.',
+                '- Order the Explorer tasks by their actual implementation dependency and execution order. Place additional Explorer-only tasks at the point where they are needed relative to the human tasks, while preserving the human task order for Explorer tasks that correspond to human tasks.',
+                '- Work on exactly one unchecked task at a time and follow the order in goals.md.',
+                '- Before each task, snapshot the relevant source files outside .git and .shoaku.',
+                '- After implementing and testing a task, create exactly one standard Git patch from that task\'s before/after source snapshots. Name it ".shoaku/task-patches/<explorerTaskIndex>.patch", where explorerTaskIndex is the task\'s zero-based position in goals.md (for example, 0.patch, 1.patch, and 2.patch).',
+                '- If the before-task and after-task source snapshots have no code differences, do not create a patch for that task and remove any stale patch already present at that explorerTaskIndex.',
+                '- Use repository-relative "a/..." and "b/..." paths in the patch and include created and deleted files.',
+                '- When a patch is created, verify that it applies to the before-task snapshot before marking the task complete.',
+                '- Never commit changes or run commands that update Git metadata or history, including git add, commit, rebase, reset, checkout, restore, or merge.',
+                '',
+                'Task reconciliation:',
+                '- Treat patches as an incremental stack in goals.md order.',
+                '- If a completed task is changed, removed, or reordered, invalidate that task and every later task.',
+                '- Reconstruct the code through the last still-valid patch in a plain temporary directory, then regenerate affected tasks and patches in the new order.',
+                '- If reconstruction or patch verification fails, preserve the existing workspace and patches and report the failure.',
               ].join('\n')
             }
           ]
@@ -364,6 +399,9 @@ async function resumeSession(shoakuId) {
     includeTurns: false
   });
   chat.temporaryWorkspace = explorerReadRes.result.thread.cwd;
+
+  const goalsPath = join(chat.temporaryWorkspace, '.shoaku', 'goals.md');
+  watchExplorerGoalsFileUpdates(goalsPath);
 
   if (!chat?.messages || chat.messages.length === 0) {
     sendAppRequest('thread/read', {
@@ -493,7 +531,7 @@ process.stdin.on('data', async (chunk) => {
           cleanupStaleBranches(initializeParams.rootPath);
 
           lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
-          lspInputBuilder.onAgentInput(async (input, shouldCompact) => {
+          lspInputBuilder.onAgentInput(async (input) => {
             if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
               return;
             }
@@ -521,8 +559,13 @@ process.stdin.on('data', async (chunk) => {
                   type: 'text',
                   text: [
                     '[Shoaku:IGNORE]',
-                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9.'
+                    'Compare the current human goal tasks with the current Explorer goal tasks.',
+                    'Return, in the tasks field defined by the output schema, the mapping from each human goal task to its corresponding Explorer goal task.',
+                    'Use humanTaskName for the exact human task name and explorerTaskIndex for the zero-based index of the corresponding Explorer task.',
+                    'Include only pairs that correspond; do not invent a match when none exists.',
+                    'Also create the complete plan.md content to use with goal/set, based on the current human goal, Explorer goal, and task mapping.',
+                    'Return that content in the planMd field defined by the output schema.',
+                    'planMd must be plain Markdown containing a concrete, ordered implementation plan; do not wrap it in a code fence and do not add commentary outside the plan.'
                   ].join('\n')
                 }
               ],
@@ -559,13 +602,14 @@ process.stdin.on('data', async (chunk) => {
           });
 
           goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
-          goalInputBuilder.onAgentInput(async (input, shouldCompact) => {
-            if (!input?.shoakuId || !shoakuToSession.has(input.shoakuId)) {
+          goalInputBuilder.onAgentInput(async (input) => {
+            const shoakuId = activeGoalItem?.shoakuId;
+            if (!shoakuId) {
               return;
             }
 
             await sendAppRequest('thread/inject_items', {
-              threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+              threadId: shoakuToSession.get(shoakuId).navigatorThreadId,
               items: [
                 {
                   type: 'message',
@@ -573,39 +617,64 @@ process.stdin.on('data', async (chunk) => {
                   content: [
                     {
                       type: 'output_text',
-                      text: [
-                        `Current Goal/Tasks: "${JSON.stringify(input)}"`
-                      ].join('\n')
+                      text: input
                     }
                   ]
                 }
               ]
             });
 
-            // FIXME: Duplicate code
-            startTurn({
-              threadId: shoakuToSession.get(input.shoakuId).navigatorThreadId,
+            await startTurn({
+              threadId: shoakuToSession.get(shoakuId).navigatorThreadId,
               input: [
                 {
                   type: 'text',
                   text: [
-                    '[Shoaku:IGNORE]',
-                    'If you feel that the user\'s current task and coding direction are unclear or inappropriate, ask a simple question to clarify any misunderstandings.',
-                    'If the next task is not reasonable for achieving the goal, return an alignmentScore below 0.9.'
+                    '[Shoaku:IGNORE_ALL]',
+                    'Compare the current human goal tasks with the current Explorer goal tasks.',
+                    'Return every Explorer goal task in the taskComparison field defined by the output schema, in the same order as the Explorer goal tasks.',
+                    'For each Explorer task, use explorerTaskIndex for its zero-based index, explorerTaskName for its exact task name, and humanTaskName for the exact name of the corresponding human task.',
+                    'If an Explorer task has no corresponding human task, return an empty string for humanTaskName; do not omit the Explorer task and do not invent a match.',
+                    'For each Explorer task, its patch path is "<Explorer temporary workspace>/.shoaku/task-patches/<explorerTaskIndex>.patch". If that file exists, return its absolute filesystem path in explorerPatchFullPath.',
+                    'If the corresponding Explorer task does not have a patch file, return an empty string for explorerPatchFullPath; do not invent a path.',
+                    'Also create the complete PLANS.md content to use with goal/set, based on the current human goal, Explorer goal, and task mapping.',
+                    'Return that content in the plansMd field defined by the output schema.',
+                    'Update plansMd only when the human goal or its human tasks have changed.',
+                    'If only the Explorer goal or Explorer tasks changed, return the previous plansMd exactly unchanged.',
+                    'When the human goal changed, plansMd must be plain Markdown containing a concrete, ordered implementation plan based on the updated human goal; do not wrap it in a code fence and do not add commentary outside the plan.'
                   ].join('\n')
                 }
               ],
               outputSchema: {
                 type: 'object',
                 properties: {
-                  alignmentScore: {
-                    description: [
-                      'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
-                    ].join('\n'),
-                    type: 'number'
+                  taskComparison: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        humanTaskName: {
+                          type: 'string'
+                        },
+                        explorerTaskIndex: {
+                          type: 'number'
+                        },
+                        explorerTaskName: {
+                          type: 'string'
+                        },
+                        explorerPatchFullPath: {
+                          type: 'string'
+                        }
+                      },
+                      required: [ 'humanTaskName', 'explorerTaskIndex', 'explorerTaskName', 'explorerPatchFullPath' ],
+                      additionalProperties: false
+                    }
+                  },
+                  plansMd: {
+                    type: 'string'
                   }
                 },
-                required: [ 'alignmentScore' ],
+                required: [ 'taskComparison', 'plansMd' ],
                 additionalProperties: false
               }
             }, {
@@ -619,22 +688,28 @@ process.stdin.on('data', async (chunk) => {
                   const message = appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
                   await syncShoakuLists(initializeParams.initializationOptions.filePath);
 
-                  if (response.alignmentScore >= 0.9) {
-                    const used = (chatByShoakuId.get(input.shoakuId).tokenUsage.navigatorTokens || 0) - (chatByShoakuId.get(input.shoakuId).tokenUsage.explorerTokens || 0);
-                    const tokenBudget = chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens - used;
-                    if (tokenBudget <= 0) {
-                      logInfo(`Token budget exceeded for shoakuId ${input.shoakuId}. Used: ${used}, Max: ${chatByShoakuId.get(input.shoakuId).tokenUsage.maxTokens}`);
-                      return;
-                    }
-
-                    await sendAppRequest('thread/goal/set', {
-                      threadId: shoakuToSession.get(input.shoakuId).explorerThreadId,
-                      objective: [
-                        `Implement it autonomously to achieve the user's goal. User's goal: ${input.content}`
-                      ].join('\n'),
-                      tokenBudget
-                    });
+                  const used = (chatByShoakuId.get(shoakuId).tokenUsage.navigatorTokens || 0) - (chatByShoakuId.get(shoakuId).tokenUsage.explorerTokens || 0);
+                  const tokenBudget = chatByShoakuId.get(shoakuId).tokenUsage.maxTokens - used;
+                  if (tokenBudget <= 0) {
+                    logInfo(`Token budget exceeded for shoakuId ${shoakuId}. Used: ${used}, Max: ${chatByShoakuId.get(shoakuId).tokenUsage.maxTokens}`);
+                    return;
                   }
+
+                  await sendAppRequest('thread/goal/set', {
+                    threadId: shoakuToSession.get(shoakuId).explorerThreadId,
+                    objective: [
+                      `Implement autonomously to achieve the user's goal: ${activeGoalItem.content}`,
+                      '',
+                      'Follow the implementation plan below. Treat it as the authoritative plan and keep .shoaku/goals.md synchronized with it.',
+                      '',
+                      '<plan_md>',
+                      response.plansMd,
+                      '</plan_md>',
+                      '',
+                      'Read and edit the existing .shoaku/goals.md in place. Do not replace that file, commit, or modify Git metadata.'
+                    ].join('\n'),
+                    tokenBudget
+                  });
                 }
               }
             );
@@ -734,62 +809,15 @@ process.stdin.on('data', async (chunk) => {
           );
           break;
 
-        case 'shoaku/startFinalCheck':
-          await startTurn({
-            threadId: shoakuToSession.get(message.params.shoakuId).navigatorThreadId,
-            input: [
-              {
-                type: 'text',
-                text: [
-                  '[Shoaku:IGNORE]',
-                  'Compare the temporary working directory and the current working directory, and summarize any overlooked issues in a report. Ignore minor differences in code style.'
-                ].join('\n')
-              }
-            ],
-            outputSchema: {
-              type: 'object',
-              properties: {
-                text: {
-                  description: 'Summary of results.',
-                  type: 'string'
-                },
-                inlineReviewComments: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      path: {
-                        type: 'string'
-                      },
-                      line: {
-                        type: 'number'
-                      },
-                      text: {
-                        type: 'string'
-                      }
-                    },
-                    required: [ 'path', 'line', 'text' ],
-                    additionalProperties: false
-                  }
-                }
-              },
-              required: [ 'text', 'inlineReviewComments' ],
-              additionalProperties: false
-            }
-          }, {
-              onItemCompleted: async (id, params) => {
-                const response = params.item.type === 'agentMessage'
-                  ? {
-                      ...params.item,
-                      ...JSON.parse(params.item.text)
-                    }
-                  : params.item;
-                appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
-                await syncShoakuLists(initializeParams.initializationOptions.filePath);
-              }
-            }
-          );
+        case 'shoaku/createDiff': {
+          const navigatorThreadId = shoakuToSession.get(message.params.shoakuId).navigatorThreadId;
+          const chat = chatByShoakuId.get(sessionToShoaku.get(navigatorThreadId));
+          const diffPath = await createDiff(message.params.explorerTaskIndex, chat.temporaryWorkspace);
+          process.stdout.write(buildResponse(message.id, {
+            explorerTaskPath: diffPath
+          }));
           break;
+        }
 
         case 'shoaku/didChangeMaxTokens': {
           const chat = chatByShoakuId.get(message.params.shoakuId);
@@ -807,6 +835,20 @@ process.stdin.on('end', () => {
   appServer.stdin.end();
 });
 
+async function createDiff(taskIndex, tempWorkspace) {
+  const outputDir = join(tempWorkspace, '.shoaku', String(taskIndex));
+  await rm(outputDir, { recursive: true, force: true });
+  await exec(`GIT_INDEX_FILE=${tempWorkspace}/.shoaku/git-index git -C ${tempWorkspace} read-tree HEAD`);
+  await exec(`GIT_INDEX_FILE=${tempWorkspace}/.shoaku/git-index git -C ${tempWorkspace} checkout-index --all --prefix=${outputDir}/`);
+  for (let i = 0; i <= taskIndex; i++) {
+    const patchPath = join(tempWorkspace, '.shoaku', 'task-patches', `${i}.patch`);
+    if (await stat(patchPath).then((s) => s.isFile() && s.size > 0).catch(() => false)) {
+      await exec(`git -C ${tempWorkspace} apply --directory=.shoaku/${taskIndex} ${patchPath}`);
+    }
+  }
+  return outputDir;
+}
+
 let prevValidGoalsFilePath = null;
 async function watchGoalsFileUpdates() {
   try {
@@ -823,7 +865,7 @@ async function watchGoalsFileUpdates() {
       if (goalInputBuilder && activeGoalItem) {
         const { messages, tokenUsage, status, ...content } = activeGoalItem;
         goalInputBuilder.ingest({
-          type: inputType.GOAL,
+          type: inputType.GOAL_HUMAN,
           content
         });
       }
@@ -836,7 +878,37 @@ async function watchGoalsFileUpdates() {
     }
   } catch (err) {
     if (err.code !== 'ENOENT') {
-      logError(`Error watching file: ${err}`);
+      logError(`Error watching human goals file: ${err}`);
+    }
+  }
+}
+
+async function watchExplorerGoalsFileUpdates(filePath) {
+  try {
+    for await (const event of watch(filePath)) {
+      const explorerShoakuId = basename(dirname(dirname(filePath)));
+      if (!activeGoalItem || explorerShoakuId !== activeGoalItem.shoakuId) {
+        continue;
+      }
+
+      try {
+        const content = await readFile(filePath, { encoding: 'utf8' });
+        const goal = parser.parse(content, { wholeFile: true });
+        if (goalInputBuilder) {
+          goalInputBuilder.ingest({
+            type: inputType.GOAL_EXPLORER,
+            content: goal
+          });
+        }
+      } catch (e) {
+        if (e.code !== 'ENOENT') {
+          throw e;
+        }
+      }
+    }
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      logError(`Error watching explorer goals file: ${err}`);
     }
   }
 }
@@ -880,8 +952,7 @@ function appendChatHistory(shoakuId, turnId, item) {
     text: item.text ||
       item.content?.filter(c => c.type === 'text').map(c => c.text).join('\n'),
     command: item.command || item.query,
-    alignmentScore: item.alignmentScore,
-    inlineReviewComments: item.inlineReviewComments
+    taskComparison: item.taskComparison
   };
   chatByShoakuId.get(shoakuId)?.messages.push(message);
 

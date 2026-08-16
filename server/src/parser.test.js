@@ -188,3 +188,26 @@ test('parse code block', (t) => {
     ]
   );
 });
+
+test('parse whole file', (t) => {
+  assert.deepStrictEqual(parser.parse([
+      '# Goal',
+      '- a',
+      '  - b'
+    ].join('\n'), { wholeFile: true }), [
+      {
+        type: 'text',
+        content: 'a',
+        line: 1,
+        children: [
+          {
+            type: 'text',
+            content: 'b',
+            line: 2,
+            children: []
+          }
+        ]
+      }
+    ]
+  );
+});

@@ -1,4 +1,4 @@
-function parse(text) {
+function parse(text, { wholeFile = false } = {}) {
   const root = { children: [] };
   const stack = [{ indent: -1, node: root }];
   let lineNumber = -1;
@@ -39,6 +39,15 @@ function parse(text) {
       codeBlock = '';
       codeBlockIndent = 0;
       isCodeBlock = false;
+    } else if (wholeFile) {
+      const match = line.match(/^(\s*)(?:- |\*)(\[[ |x]\]|) *(.+?)$/d);
+      if (match) {
+        indent = match[1].length;
+        checked = match[2];
+        content = match[3];
+      } else {
+        continue;
+      }
     } else {
       const match = line.match(/^(\s*)(?:- |\* |)(\[[ |x]\]|) *(?:\[(shoaku(?:-[A-Za-z0-9]+)?)\])? *(.+?) *(?:\[(shoaku(?:-[A-Za-z0-9]+)?)\])?$/d);
       if (match) {
@@ -56,7 +65,7 @@ function parse(text) {
       stack.pop();
     }
 
-    if (!label && stack[stack.length - 1].indent < 0) {
+    if (!wholeFile && !label && stack[stack.length - 1].indent < 0) {
       continue;
     }
 

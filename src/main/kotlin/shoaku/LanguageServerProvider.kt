@@ -80,6 +80,20 @@ data class Item(
     val temporaryWorkspace: String? = null
 )
 
+data class TaskComparisonRowUi(
+    val id: String,
+    val humanTask: ComparedTaskUi? = null,
+    val explorerTask: ComparedTaskUi? = null,
+    val difference: String,
+    val explorerPatchFullPath: String? = null
+)
+
+data class ComparedTaskUi(
+    val id: String,
+    val content: String,
+    val checked: Boolean = false
+)
+
 data class Message(
     val type: String,
     val turnId: String? = null,
@@ -87,7 +101,15 @@ data class Message(
     val text: String? = null,
     val command: String? = null,
     val alignmentScore: Double? = null,
-    val inlineReviewComments: List<ReviewComment>? = emptyList()
+    val inlineReviewComments: List<ReviewComment>? = emptyList(),
+    val taskComparison: List<TaskComparison>? = null
+)
+
+data class TaskComparison(
+    val humanTaskName: String,
+    val explorerTaskIndex: Int,
+    val explorerTaskName: String,
+    val explorerPatchFullPath: String
 )
 
 data class ReviewComment(
