@@ -338,6 +338,10 @@ async function startNewSession(goalItem) {
 
   startTurn({
     threadId: navigatorThreadId,
+    sandboxPolicy: {
+      type: 'readOnly',
+      networkAccess: true
+    },
     input: [
       {
         type: 'text',
@@ -551,54 +555,6 @@ process.stdin.on('data', async (chunk) => {
                 }
               ]
             });
-
-            startTurn({
-              threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
-              input: [
-                {
-                  type: 'text',
-                  text: [
-                    '[Shoaku:IGNORE]',
-                    'Compare the current human goal tasks with the current Explorer goal tasks.',
-                    'Return, in the tasks field defined by the output schema, the mapping from each human goal task to its corresponding Explorer goal task.',
-                    'Use humanTaskName for the exact human task name and explorerTaskIndex for the zero-based index of the corresponding Explorer task.',
-                    'Include only pairs that correspond; do not invent a match when none exists.',
-                    'Also create the complete plan.md content to use with goal/set, based on the current human goal, Explorer goal, and task mapping.',
-                    'Return that content in the planMd field defined by the output schema.',
-                    'planMd must be plain Markdown containing a concrete, ordered implementation plan; do not wrap it in a code fence and do not add commentary outside the plan.'
-                  ].join('\n')
-                }
-              ],
-              outputSchema: {
-                type: 'object',
-                properties: {
-                  alignmentScore: {
-                    description: [
-                      'It anticipates all tasks necessary to achieve the objective and returns a score of 0-1 indicating how well they match the user\'s tasks.'
-                    ].join('\n'),
-                    type: 'number'
-                  }
-                },
-                required: [ 'alignmentScore' ],
-                additionalProperties: false
-              }
-            }, {
-                onItemCompleted: async (id, params) => {
-                  let response = params.item;
-                  if (typeof response.text === 'string') {
-                    try {
-                      response = {
-                        ...response,
-                        ...JSON.parse(params.item.text)
-                      };
-                    } catch(_) {
-                    }
-                  }
-                  appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, response);
-                  await syncShoakuLists(initializeParams.initializationOptions.filePath);
-                }
-              }
-            );
           });
 
           goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
@@ -626,6 +582,10 @@ process.stdin.on('data', async (chunk) => {
 
             await startTurn({
               threadId: shoakuToSession.get(shoakuId).navigatorThreadId,
+              sandboxPolicy: {
+                type: 'readOnly',
+                networkAccess: true
+              },
               input: [
                 {
                   type: 'text',
@@ -775,30 +735,14 @@ process.stdin.on('data', async (chunk) => {
 
           await startTurn({
             threadId: navigatorThreadId,
+            sandboxPolicy: {
+              type: 'readOnly',
+              networkAccess: true
+            },
             input: [
               {
                 type: 'text',
                 text: message.params.text
-              }
-            ]}, {
-              onItemCompleted: async (id, params) => {
-                appendChatHistory(sessionToShoaku.get(params.threadId), params.turnId, params.item);
-                await syncShoakuLists(initializeParams.initializationOptions.filePath);
-              }
-            }
-          );
-          break;
-
-        case 'shoaku/makeMeExplain':
-          await startTurn({
-            threadId: shoakuToSession.get(message.params.shoakuId).navigatorThreadId,
-            input: [
-              {
-                type: 'text',
-                text: [
-                  '[Shoaku:IGNORE]',
-                  'Ask thorough questions about anything the user seems to lack understanding of based on their previous actions, which could be why they are unable to complete the current task.'
-                ].join('\n')
               }
             ]}, {
               onItemCompleted: async (id, params) => {
@@ -941,7 +885,7 @@ function findActiveItem(lists) {
 }
 
 function appendChatHistory(shoakuId, turnId, item) {
-  if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE]')) {
+  if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE')) {
     return null;
   }
 

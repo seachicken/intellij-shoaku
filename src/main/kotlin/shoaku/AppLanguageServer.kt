@@ -14,8 +14,6 @@ interface AppLanguageServer : LanguageServer {
     fun applyDiff(params: ApplyDiffParams)
     @JsonNotification("shoaku/reply")
     fun reply(params: ReplyParams)
-    @JsonNotification("shoaku/makeMeExplain")
-    fun makeMeExplain(params: MakeMeExplainParams)
     @JsonNotification("shoaku/didChangeMaxTokens")
     fun didChangeMaxTokens(params: DidChangeMaxTokens)
     @JsonRequest("shoaku/createDiff")
