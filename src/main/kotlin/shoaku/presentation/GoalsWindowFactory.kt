@@ -1139,7 +1139,9 @@ private fun ExplorerTaskComparisonLine(
             onOpenCodeDiff = onOpenCodeDiff,
             onRunImplementationCommand = {},
             onMenuExpandedChange = onMenuExpandedChange,
-            modifier = Modifier.align(Alignment.CenterEnd)
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 8.dp)
         )
     }
 }
