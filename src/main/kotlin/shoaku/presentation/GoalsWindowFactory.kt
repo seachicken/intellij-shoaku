@@ -1035,29 +1035,75 @@ private fun PlanComparisonRow(
             ),
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            if (row.difference != TaskDifferenceExplorerOnly) {
-                UnifiedTaskLine(
-                    task = row.humanTask,
-                    isActive = isActive,
-                    trailing = null
-                )
-            }
-            row.explorerTasks.forEach { explorerTask ->
-                ExplorerTaskComparisonLine(
-                    explorerTask = explorerTask,
-                    humanTask = row.humanTask,
+            row.humanTask?.let { humanTask ->
+                HumanTaskComparisonLine(
+                    humanTask = humanTask,
+                    explorerTask = row.explorerTasks.firstOrNull(),
                     active = isActive,
                     temporaryWorkspace = temporaryWorkspace,
                     hovered = hovered || actionMenuExpanded,
                     runImplementationCommandEnabled = runImplementationCommandEnabled,
-                    onOpenCodeDiff = { onOpenCodeDiff(explorerTask.taskIndex()) },
+                    onOpenCodeDiff = {
+                        row.explorerTasks.firstOrNull()?.let { onOpenCodeDiff(it.taskIndex()) }
+                    },
                     onRunImplementationCommand = {
-                        (row.humanTask ?: explorerTask.task)?.content?.let(onRunImplementationCommand)
+                        onRunImplementationCommand(humanTask.content)
                     },
                     onMenuExpandedChange = { actionMenuExpanded = it }
                 )
             }
+            if (row.humanTask == null) {
+                row.explorerTasks.forEach { explorerTask ->
+                    ExplorerTaskComparisonLine(
+                        explorerTask = explorerTask,
+                        humanTask = null,
+                        active = isActive,
+                        temporaryWorkspace = temporaryWorkspace,
+                        hovered = hovered || actionMenuExpanded,
+                        runImplementationCommandEnabled = runImplementationCommandEnabled,
+                        onOpenCodeDiff = { onOpenCodeDiff(explorerTask.taskIndex()) },
+                        onMenuExpandedChange = { actionMenuExpanded = it }
+                    )
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun HumanTaskComparisonLine(
+    humanTask: ComparedTaskUi,
+    explorerTask: ComparedExplorerTaskUi?,
+    active: Boolean,
+    temporaryWorkspace: String?,
+    hovered: Boolean,
+    runImplementationCommandEnabled: Boolean,
+    onOpenCodeDiff: () -> Unit,
+    onRunImplementationCommand: () -> Unit,
+    onMenuExpandedChange: (Boolean) -> Unit
+) {
+    val patchPath = explorerTask?.effectivePatchPath(temporaryWorkspace)
+    Box(modifier = Modifier.fillMaxWidth()) {
+        UnifiedTaskLine(
+            task = humanTask,
+            isActive = active,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = 104.dp)
+        )
+        TaskBackgroundImplementationControls(
+            progress = explorerTask?.let { taskExplorerProgress(it, humanTask, active, patchPath) }
+                ?: TaskExplorerProgress.Unassigned,
+            temporaryWorkspace = temporaryWorkspace,
+            patchFullPath = patchPath,
+            showActions = hovered,
+            showDelegateImplementation = true,
+            runImplementationCommandEnabled = runImplementationCommandEnabled,
+            onOpenCodeDiff = onOpenCodeDiff,
+            onRunImplementationCommand = onRunImplementationCommand,
+            onMenuExpandedChange = onMenuExpandedChange,
+            modifier = Modifier.align(Alignment.CenterEnd)
+        )
     }
 }
 
@@ -1070,13 +1116,13 @@ private fun ExplorerTaskComparisonLine(
     hovered: Boolean,
     runImplementationCommandEnabled: Boolean,
     onOpenCodeDiff: () -> Unit,
-    onRunImplementationCommand: () -> Unit,
     onMenuExpandedChange: (Boolean) -> Unit
 ) {
     val patchPath = explorerTask.effectivePatchPath(temporaryWorkspace)
+    val completionTime = rememberExplorerPatchModifiedAt(temporaryWorkspace, patchPath)
     Box(modifier = Modifier.fillMaxWidth()) {
         UnifiedTaskLine(
-            task = explorerTask.task,
+            task = explorerTask.task.copy(checked = completionTime != null),
             prefix = "Explorer",
             prefixColor = TodoColors.explorerAccent,
             modifier = Modifier
@@ -1088,9 +1134,10 @@ private fun ExplorerTaskComparisonLine(
             temporaryWorkspace = temporaryWorkspace,
             patchFullPath = patchPath,
             showActions = hovered,
+            showDelegateImplementation = false,
             runImplementationCommandEnabled = runImplementationCommandEnabled,
             onOpenCodeDiff = onOpenCodeDiff,
-            onRunImplementationCommand = onRunImplementationCommand,
+            onRunImplementationCommand = {},
             onMenuExpandedChange = onMenuExpandedChange,
             modifier = Modifier.align(Alignment.CenterEnd)
         )
@@ -1123,6 +1170,7 @@ private fun TaskBackgroundImplementationControls(
     temporaryWorkspace: String?,
     patchFullPath: String?,
     showActions: Boolean,
+    showDelegateImplementation: Boolean,
     runImplementationCommandEnabled: Boolean,
     onOpenCodeDiff: () -> Unit,
     onRunImplementationCommand: () -> Unit,
@@ -1190,7 +1238,7 @@ private fun TaskBackgroundImplementationControls(
             exit = fadeOut(animationSpec = tween(70))
         ) {
             Row(
-                modifier = Modifier.width(52.dp),
+                modifier = Modifier.width(if (showDelegateImplementation) 52.dp else 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1207,11 +1255,13 @@ private fun TaskBackgroundImplementationControls(
                         }
                     }
                 }
-                DelegateImplementationMenu(
-                    enabled = runImplementationCommandEnabled,
-                    onRunImplementationCommand = onRunImplementationCommand,
-                    onExpandedChange = onMenuExpandedChange
-                )
+                if (showDelegateImplementation) {
+                    DelegateImplementationMenu(
+                        enabled = runImplementationCommandEnabled,
+                        onRunImplementationCommand = onRunImplementationCommand,
+                        onExpandedChange = onMenuExpandedChange
+                    )
+                }
             }
         }
     }

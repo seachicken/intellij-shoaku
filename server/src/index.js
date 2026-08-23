@@ -266,32 +266,12 @@ async function startNewSession(goalItem) {
             {
               type: 'input_text',
               text: [
-                'You can understand what the user wants to achieve and implement it autonomously.',
-                '',
-                'Responsibilities:',
-                '- Understand the user\'s overall goals and short-term tasks from their TODO list.',
-                '- Independently generate code to achieve the user\'s goals.',
-                '',
-                'Plan and patch workflow:',
-                '- The server has already created ".shoaku/goals.md" in this workspace. Read and edit that existing file as the authoritative implementation plan.',
-                '- Do not create, delete, rename, or replace .shoaku/goals.md. Preserve its existing goal heading and edit the same file in place.',
-                '- Before changing code, add the complete plan to the existing goals.md as a Markdown checklist.',
-                '- Do not use an internal plan or another plan file as a substitute for updating .shoaku/goals.md.',
-                '- Keep goals.md as a plain Markdown checklist. Do not add task IDs, human-task-name metadata, or task-mapping HTML comments.',
-                '- Order the Explorer tasks by their actual implementation dependency and execution order. Place additional Explorer-only tasks at the point where they are needed relative to the human tasks, while preserving the human task order for Explorer tasks that correspond to human tasks.',
-                '- Work on exactly one unchecked task at a time and follow the order in goals.md.',
-                '- Before each task, snapshot the relevant source files outside .git and .shoaku.',
-                '- After implementing and testing a task, create exactly one standard Git patch from that task\'s before/after source snapshots. Name it ".shoaku/task-patches/<explorerTaskIndex>.patch", where explorerTaskIndex is the task\'s zero-based position in goals.md (for example, 0.patch, 1.patch, and 2.patch).',
-                '- If the before-task and after-task source snapshots have no code differences, do not create a patch for that task and remove any stale patch already present at that explorerTaskIndex.',
-                '- Use repository-relative "a/..." and "b/..." paths in the patch and include created and deleted files.',
-                '- When a patch is created, verify that it applies to the before-task snapshot before marking the task complete.',
-                '- Never commit changes or run commands that update Git metadata or history, including git add, commit, rebase, reset, checkout, restore, or merge.',
-                '',
-                'Task reconciliation:',
-                '- Treat patches as an incremental stack in goals.md order.',
-                '- If a completed task is changed, removed, or reordered, invalidate that task and every later task.',
-                '- Reconstruct the code through the last still-valid patch in a plain temporary directory, then regenerate affected tasks and patches in the new order.',
-                '- If reconstruction or patch verification fails, preserve the existing workspace and patches and report the failure.',
+                'Autonomously implement the user\'s TODOs.',
+                '- Use the existing .shoaku/goals.md as the sole plan: preserve its heading, edit it in place as a plain Markdown checklist, and do not add IDs or mapping metadata.',
+                '- Match human task granularity: normally one ordered Explorer task and one patch per human task. Split or add a task only when it is independently reviewable.',
+                '- Complete one unchecked task at a time. Snapshot relevant source files, then create and verify .shoaku/task-patches/<zero-based task index>.patch from that task\'s before/after snapshots; include additions/deletions and a/... and b/... paths. Remove a stale patch when there is no diff.',
+                '- Never commit or change Git metadata.',
+                '- Patches stack in checklist order. When the plan changes, retain unchanged valid task/patch pairs; invalidate a changed, removed, or reordered task and later tasks, reconstruct the valid prefix, and regenerate the affected suffix. On failure, preserve the workspace and patches and report it.',
               ].join('\n')
             }
           ]
@@ -591,18 +571,10 @@ process.stdin.on('data', async (chunk) => {
                   type: 'text',
                   text: [
                     '[Shoaku:IGNORE]',
-                    'Compare the current human goal tasks with the current Explorer goal tasks.',
-                    'Return every Explorer goal task in the taskComparison field defined by the output schema, in the same order as the Explorer goal tasks.',
-                    'For each Explorer task, use explorerTaskIndex for its zero-based index, explorerTaskName for its exact task name, and humanTaskName for the exact name of the corresponding human task.',
-                    'Avoid assigning multiple Explorer tasks to the same human task unless the Explorer plan genuinely requires multiple implementation steps for that single human task. When that is necessary, reuse the exact same humanTaskName consistently for those Explorer tasks.',
-                    'If an Explorer task has no corresponding human task, return an empty string for humanTaskName; do not omit the Explorer task and do not invent a match.',
-                    'For each Explorer task, its patch path is "<Explorer temporary workspace>/.shoaku/task-patches/<explorerTaskIndex>.patch". If that file exists, return its absolute filesystem path in explorerPatchFullPath.',
-                    'If the corresponding Explorer task does not have a patch file, return an empty string for explorerPatchFullPath; do not invent a path.',
-                    'Also create the complete PLANS.md content to use with goal/set, based on the current human goal, Explorer goal, and task mapping.',
-                    'Return that content in the plansMd field defined by the output schema.',
-                    'Update plansMd only when the human goal or its human tasks have changed.',
-                    'If only the Explorer goal or Explorer tasks changed, return the previous plansMd exactly unchanged.',
-                    'When the human goal changed, plansMd must be plain Markdown containing a concrete, ordered implementation plan based on the updated human goal; do not wrap it in a code fence and do not add commentary outside the plan.'
+                    'Compare the human and Explorer checklists.',
+                    'Return every Explorer task in order. Use its zero-based index and exact name; map it to the exact human task name, or "" when unmatched. Prefer one-to-one mapping; reuse a human name only for a necessary independently reviewable split.',
+                    'Set explorerPatchFullPath to the absolute path of its existing .shoaku/task-patches/<index>.patch, otherwise "".',
+                    'Return plansMd: update it only when the human goal/tasks changed; otherwise preserve it exactly. When updated, make it a concrete ordered Markdown plan with no code fence or commentary.'
                   ].join('\n')
                 }
               ],
@@ -661,7 +633,7 @@ process.stdin.on('data', async (chunk) => {
                     objective: [
                       `Implement autonomously to achieve the user's goal: ${activeGoalItem.content}`,
                       '',
-                      'Follow the implementation plan below. Treat it as the authoritative plan and keep .shoaku/goals.md synchronized with it.',
+                      'Use this authoritative plan to synchronize .shoaku/goals.md. Reconcile it with the existing patch stack before continuing; retain the valid prefix and regenerate only the affected suffix.',
                       '',
                       '<plan_md>',
                       response.plansMd,
