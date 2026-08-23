@@ -590,10 +590,11 @@ process.stdin.on('data', async (chunk) => {
                 {
                   type: 'text',
                   text: [
-                    '[Shoaku:IGNORE_ALL]',
+                    '[Shoaku:IGNORE]',
                     'Compare the current human goal tasks with the current Explorer goal tasks.',
                     'Return every Explorer goal task in the taskComparison field defined by the output schema, in the same order as the Explorer goal tasks.',
                     'For each Explorer task, use explorerTaskIndex for its zero-based index, explorerTaskName for its exact task name, and humanTaskName for the exact name of the corresponding human task.',
+                    'Avoid assigning multiple Explorer tasks to the same human task unless the Explorer plan genuinely requires multiple implementation steps for that single human task. When that is necessary, reuse the exact same humanTaskName consistently for those Explorer tasks.',
                     'If an Explorer task has no corresponding human task, return an empty string for humanTaskName; do not omit the Explorer task and do not invent a match.',
                     'For each Explorer task, its patch path is "<Explorer temporary workspace>/.shoaku/task-patches/<explorerTaskIndex>.patch". If that file exists, return its absolute filesystem path in explorerPatchFullPath.',
                     'If the corresponding Explorer task does not have a patch file, return an empty string for explorerPatchFullPath; do not invent a path.',
@@ -885,7 +886,7 @@ function findActiveItem(lists) {
 }
 
 function appendChatHistory(shoakuId, turnId, item) {
-  if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE')) {
+  if (item.content?.[0]?.text?.startsWith('[Shoaku:IGNORE]')) {
     return null;
   }
 

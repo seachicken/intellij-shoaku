@@ -693,8 +693,9 @@ private fun SessionTaskPane(
     val activeComparisonRow = comparisonRows.firstOrNull {
         it.humanTask?.content == activeItem?.content
     }
-    val activeExplorerTaskIndex = activeComparisonRow?.explorerTaskIndex()
-    val activeTaskPatchPath = activeComparisonRow?.effectiveExplorerPatchPath(session.temporaryWorkspace)
+    val activeExplorerTask = activeComparisonRow?.explorerTasks?.firstOrNull()
+    val activeExplorerTaskIndex = activeExplorerTask?.taskIndex()
+    val activeTaskPatchPath = activeExplorerTask?.effectivePatchPath(session.temporaryWorkspace)
     val sendReply = {
         replyState.thinking.value = true
         replyState.startMessageCount.value = messages.size
@@ -860,18 +861,12 @@ private fun PlanComparisonPane(
                     if (!section.suggested || expandedSuggestionSections[section.id] == true) {
                         items(section.rows, key = { it.id }) { row ->
                             PlanComparisonRow(
-                                row = row.copy(
-                                    explorerPatchFullPath = row.effectiveExplorerPatchPath(temporaryWorkspace)
-                                ),
+                                row = row,
                                 temporaryWorkspace = temporaryWorkspace,
                                 isActive = row.id == activeComparisonRowId,
-                                onOpenCodeDiff = {
-                                    row.explorerTaskIndex()?.let(onOpenCodeDiff)
-                                },
+                                onOpenCodeDiff = onOpenCodeDiff,
                                 runImplementationCommandEnabled = runImplementationCommandEnabled,
-                                onRunImplementationCommand = {
-                                    (row.humanTask ?: row.explorerTask)?.content?.let(onRunImplementationCommand)
-                                }
+                                onRunImplementationCommand = onRunImplementationCommand
                             )
                             Box(
                                 Modifier.fillMaxWidth().height(1.dp)
@@ -890,8 +885,8 @@ internal fun planComparisonRows(
     humanTasks: List<Item>
 ): List<TaskComparisonRowUi> {
     if (comparisonRows != null) {
-        val remainingExplorerRows = comparisonRows.filter { it.explorerTask != null }.toMutableList()
-        val remainingHumanOnlyRows = comparisonRows.filter { it.explorerTask == null }.toMutableList()
+        val remainingExplorerRows = comparisonRows.filter { it.explorerTasks.isNotEmpty() }.toMutableList()
+        val remainingHumanOnlyRows = comparisonRows.filter { it.explorerTasks.isEmpty() }.toMutableList()
         val orderedRows = mutableListOf<TaskComparisonRowUi>()
 
         humanTasks.forEach { task ->
@@ -929,7 +924,9 @@ internal fun taskComparisonRows(
     val matchedHumanTaskNames = comparison.mapNotNullTo(mutableSetOf()) {
         it.humanTaskName.takeIf(String::isNotEmpty)
     }
-    val explorerRows = comparison.map { result ->
+    val explorerRows = mutableListOf<TaskComparisonRowUi>()
+    val alignedRowIndexes = mutableMapOf<String, Int>()
+    comparison.forEach { result ->
         val humanItem = humanTasksByName[result.humanTaskName]
         val humanTask = humanItem?.let {
             ComparedTaskUi(
@@ -942,13 +939,33 @@ internal fun taskComparisonRows(
             id = "explorer-${result.explorerTaskIndex}",
             content = result.explorerTaskName
         )
-        TaskComparisonRowUi(
-            id = "explorer-${result.explorerTaskIndex}",
-            humanTask = humanTask,
-            explorerTask = explorerTask,
-            difference = if (humanTask == null) TaskDifferenceExplorerOnly else TaskDifferenceAligned,
-            explorerPatchFullPath = result.explorerPatchFullPath.takeIf(String::isNotBlank)
+        val comparedExplorerTask = ComparedExplorerTaskUi(
+            task = explorerTask,
+            patchFullPath = result.explorerPatchFullPath.takeIf(String::isNotBlank)
         )
+        if (humanTask != null && result.humanTaskName.isNotEmpty()) {
+            val existingIndex = alignedRowIndexes[result.humanTaskName]
+            if (existingIndex != null) {
+                val existing = explorerRows[existingIndex]
+                explorerRows[existingIndex] = existing.copy(
+                    explorerTasks = existing.explorerTasks + comparedExplorerTask
+                )
+            } else {
+                alignedRowIndexes[result.humanTaskName] = explorerRows.size
+                explorerRows += TaskComparisonRowUi(
+                    id = "human-${result.humanTaskName}",
+                    humanTask = humanTask,
+                    explorerTasks = listOf(comparedExplorerTask),
+                    difference = TaskDifferenceAligned
+                )
+            }
+        } else {
+            explorerRows += TaskComparisonRowUi(
+                id = "explorer-${result.explorerTaskIndex}",
+                explorerTasks = listOf(comparedExplorerTask),
+                difference = TaskDifferenceExplorerOnly
+            )
+        }
     }
     val humanOnlyRows = humanTasks
         .filterNot { it.content in matchedHumanTaskNames }
@@ -990,9 +1007,9 @@ private fun PlanComparisonRow(
     row: TaskComparisonRowUi,
     temporaryWorkspace: String?,
     isActive: Boolean,
-    onOpenCodeDiff: () -> Unit,
+    onOpenCodeDiff: (Int) -> Unit,
     runImplementationCommandEnabled: Boolean,
-    onRunImplementationCommand: () -> Unit
+    onRunImplementationCommand: (String) -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -1013,36 +1030,69 @@ private fun PlanComparisonRow(
             modifier = Modifier.padding(
                 start = if (row.difference == TaskDifferenceExplorerOnly) 22.dp else 8.dp,
                 top = 7.dp,
-                end = 104.dp,
+                end = 0.dp,
                 bottom = 7.dp
             ),
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            when {
-                row.difference == TaskDifferenceExplorerOnly -> {
-                    UnifiedTaskLine(task = row.explorerTask)
-                }
-                else -> {
-                    UnifiedTaskLine(
-                        task = row.humanTask ?: row.explorerTask,
-                        isActive = isActive,
-                        trailing = null
-                    )
-                }
+            if (row.difference != TaskDifferenceExplorerOnly) {
+                UnifiedTaskLine(
+                    task = row.humanTask,
+                    isActive = isActive,
+                    trailing = null
+                )
+            }
+            row.explorerTasks.forEach { explorerTask ->
+                ExplorerTaskComparisonLine(
+                    explorerTask = explorerTask,
+                    humanTask = row.humanTask,
+                    active = isActive,
+                    temporaryWorkspace = temporaryWorkspace,
+                    hovered = hovered || actionMenuExpanded,
+                    runImplementationCommandEnabled = runImplementationCommandEnabled,
+                    onOpenCodeDiff = { onOpenCodeDiff(explorerTask.taskIndex()) },
+                    onRunImplementationCommand = {
+                        (row.humanTask ?: explorerTask.task)?.content?.let(onRunImplementationCommand)
+                    },
+                    onMenuExpandedChange = { actionMenuExpanded = it }
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun ExplorerTaskComparisonLine(
+    explorerTask: ComparedExplorerTaskUi,
+    humanTask: ComparedTaskUi?,
+    active: Boolean,
+    temporaryWorkspace: String?,
+    hovered: Boolean,
+    runImplementationCommandEnabled: Boolean,
+    onOpenCodeDiff: () -> Unit,
+    onRunImplementationCommand: () -> Unit,
+    onMenuExpandedChange: (Boolean) -> Unit
+) {
+    val patchPath = explorerTask.effectivePatchPath(temporaryWorkspace)
+    Box(modifier = Modifier.fillMaxWidth()) {
+        UnifiedTaskLine(
+            task = explorerTask.task,
+            prefix = "Explorer",
+            prefixColor = TodoColors.explorerAccent,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = 104.dp)
+        )
         TaskBackgroundImplementationControls(
-            progress = taskExplorerProgress(row, isActive),
+            progress = taskExplorerProgress(explorerTask, humanTask, active, patchPath),
             temporaryWorkspace = temporaryWorkspace,
-            patchFullPath = row.explorerPatchFullPath,
-            showActions = hovered || actionMenuExpanded,
+            patchFullPath = patchPath,
+            showActions = hovered,
             runImplementationCommandEnabled = runImplementationCommandEnabled,
             onOpenCodeDiff = onOpenCodeDiff,
             onRunImplementationCommand = onRunImplementationCommand,
-            onMenuExpandedChange = { actionMenuExpanded = it },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 7.dp, end = 8.dp)
+            onMenuExpandedChange = onMenuExpandedChange,
+            modifier = Modifier.align(Alignment.CenterEnd)
         )
     }
 }
@@ -1055,11 +1105,13 @@ internal enum class TaskExplorerProgress {
 }
 
 internal fun taskExplorerProgress(
-    row: TaskComparisonRowUi,
-    active: Boolean
+    explorerTask: ComparedExplorerTaskUi,
+    humanTask: ComparedTaskUi?,
+    active: Boolean,
+    patchPath: String? = explorerTask.patchFullPath
 ): TaskExplorerProgress = when {
-    !row.explorerPatchFullPath.isNullOrBlank() -> TaskExplorerProgress.Ready
-    row.humanTask == null || row.explorerTask == null -> TaskExplorerProgress.Unassigned
+    !patchPath.isNullOrBlank() -> TaskExplorerProgress.Ready
+    humanTask == null -> TaskExplorerProgress.Unassigned
     active -> TaskExplorerProgress.Working
     else -> TaskExplorerProgress.Queued
 }
@@ -1165,14 +1217,13 @@ private fun TaskBackgroundImplementationControls(
     }
 }
 
-private fun TaskComparisonRowUi.explorerTaskIndex(): Int? =
-    explorerTask?.id?.removePrefix("explorer-")?.toIntOrNull()
+private fun ComparedExplorerTaskUi.taskIndex(): Int =
+    task.id.removePrefix("explorer-").toIntOrNull() ?: 0
 
-private fun TaskComparisonRowUi.effectiveExplorerPatchPath(temporaryWorkspace: String?): String? {
-    explorerPatchFullPath?.takeIf(String::isNotBlank)?.let { return it }
+private fun ComparedExplorerTaskUi.effectivePatchPath(temporaryWorkspace: String?): String? {
+    patchFullPath?.takeIf(String::isNotBlank)?.let { return it }
     val workspace = temporaryWorkspace?.takeIf(String::isNotBlank) ?: return null
-    val taskIndex = explorerTaskIndex() ?: return null
-    return Path.of(workspace).resolve(".shoaku/task-patches/$taskIndex.patch").toString()
+    return Path.of(workspace).resolve(".shoaku/task-patches/${taskIndex()}.patch").toString()
 }
 
 @Composable
@@ -2303,12 +2354,6 @@ internal fun hasResponseAfterLatestAlignment(messages: List<Message>): Boolean {
     }
 }
 
-private fun isConversationMessage(message: Message): Boolean =
-    message.command.isNullOrBlank() &&
-        !message.text.isNullOrBlank() &&
-        message.type in setOf("userMessage", "agentMessage") &&
-        message.phase != "final_check"
-
 private fun isUnexpectedMessageType(type: String): Boolean =
     type !in setOf(
         "userMessage",
@@ -2319,12 +2364,17 @@ private fun isUnexpectedMessageType(type: String): Boolean =
         "contextCompactionStarted"
     )
 
+private fun isTaskComparisonMessage(message: Message): Boolean =
+    message.taskComparison != null
+
 private fun isVisibleChatMessage(message: Message): Boolean =
     // Reasoning items are frequent internal progress updates and add noise to the conversation.
     message.type != "reasoning" &&
+        message.phase != "final_check" &&
         message.alignmentScore == null &&
         (
             message.type in setOf("contextCompaction", "contextCompactionStarted") ||
+                isTaskComparisonMessage(message) ||
                 isUnexpectedMessageType(message.type) ||
                 message.command?.isNotBlank() == true ||
                 message.text?.isNotBlank() == true
@@ -3132,6 +3182,7 @@ private fun ChatEntryRow(
     topSpacing: Dp
 ) {
     if (
+        isTaskComparisonMessage(entry) ||
         isUnexpectedMessageType(entry.type) ||
             entry.command != null ||
             entry.type in setOf("contextCompaction", "contextCompactionStarted")
@@ -3161,7 +3212,7 @@ private fun ChatEntryRow(
             horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
         ) {
             Column(
-                modifier = Modifier.widthIn(max = 520.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -3740,6 +3791,7 @@ private fun ChatActivityRow(
     val activityLabel = when (entry.type) {
         "contextCompactionStarted" -> "Compacting context"
         "contextCompaction" -> "Compacted context"
+        else if (isTaskComparisonMessage(entry)) -> "Updated task comparison"
         else if (isUnexpectedMessageType(entry.type)) -> "Ran ${entry.type}"
         else -> {
             val command = entry.command ?: return

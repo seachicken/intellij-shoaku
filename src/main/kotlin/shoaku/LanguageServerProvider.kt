@@ -83,9 +83,13 @@ data class Item(
 data class TaskComparisonRowUi(
     val id: String,
     val humanTask: ComparedTaskUi? = null,
-    val explorerTask: ComparedTaskUi? = null,
+    val explorerTasks: List<ComparedExplorerTaskUi> = emptyList(),
     val difference: String,
-    val explorerPatchFullPath: String? = null
+)
+
+data class ComparedExplorerTaskUi(
+    val task: ComparedTaskUi,
+    val patchFullPath: String? = null
 )
 
 data class ComparedTaskUi(
