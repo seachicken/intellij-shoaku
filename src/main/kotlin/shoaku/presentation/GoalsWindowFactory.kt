@@ -3270,17 +3270,19 @@ private fun ChatEntryRow(
             ) {
                 if (isUser) {
                     val userBubbleShape = RoundedCornerShape(14.dp)
-                    Text(
-                        text = message,
-                        color = TodoColors.userMessageText,
-                        fontSize = 13.sp,
-                        lineHeight = 21.sp,
-                        modifier = Modifier
-                            .clip(userBubbleShape)
-                            .background(TodoColors.userMessageSurface)
-                            .border(1.dp, TodoColors.userMessageBorder, userBubbleShape)
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = message,
+                            color = TodoColors.userMessageText,
+                            fontSize = 13.sp,
+                            lineHeight = 21.sp,
+                            modifier = Modifier
+                                .clip(userBubbleShape)
+                                .background(TodoColors.userMessageSurface)
+                                .border(1.dp, TodoColors.userMessageBorder, userBubbleShape)
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                        )
+                    }
                 } else {
                     AgentMessageContent(
                         message = message,
@@ -3313,9 +3315,10 @@ private fun AgentMessageContent(
         return
     }
     val blocks = remember(message) { parseAgentMessageBlocks(message) }
-    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        blocks.forEach { block ->
-            when (block) {
+    SelectionContainer {
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            blocks.forEach { block ->
+                when (block) {
                 is AgentMessageBlock.Paragraph -> MarkdownTextBlock(text = block.text, style = style, onLinkClick = onLinkClick)
                 is AgentMessageBlock.Heading -> MarkdownTextBlock(
                     text = block.text,
@@ -3364,6 +3367,7 @@ private fun AgentMessageContent(
                         .height(1.dp)
                         .background(TodoColors.agentMessageDivider)
                 )
+                }
             }
         }
     }
@@ -3616,17 +3620,15 @@ private fun CodeBlock(block: AgentMessageBlock.Code) {
                 .horizontalScroll(horizontalScroll)
                 .padding(horizontal = 12.dp)
         ) {
-            SelectionContainer {
-                Text(
-                    text = block.code,
-                    color = TodoColors.infoText,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp,
-                    softWrap = false,
-                    modifier = Modifier.wrapContentWidth(unbounded = true)
-                )
-            }
+            Text(
+                text = block.code,
+                color = TodoColors.infoText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                softWrap = false,
+                modifier = Modifier.wrapContentWidth(unbounded = true)
+            )
         }
     }
 }
