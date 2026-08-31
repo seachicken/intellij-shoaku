@@ -571,10 +571,11 @@ process.stdin.on('data', async (chunk) => {
                   type: 'text',
                   text: [
                     '[Shoaku:IGNORE]',
-                    'Compare the human and Explorer checklists.',
-                    'Return every Explorer task in order. Use its zero-based index and exact name; map it to the exact human task name, or "" when unmatched. Prefer one-to-one mapping; reuse a human name only for a necessary independently reviewable split.',
-                    'Set explorerPatchFullPath to the absolute path of its existing .shoaku/task-patches/<index>.patch, otherwise "".',
-                    'Return plansMd: update it only when the human goal/tasks changed; otherwise preserve it exactly. When updated, make it a concrete ordered Markdown plan with no code fence or commentary.'
+                    'Compare the human and Explorer task checklists using only the preceding injected input, which contains the authoritative checklist changes.',
+                    'Return every Explorer task in order in taskComparison, including checked and unchecked tasks. Use its zero-based index and exact name.',
+                    'Map each Explorer task to the exact human task name, or use an empty humanTaskName when there is no match. Do not omit or invent tasks.',
+                    'Set explorerPatchFullPath to the existing absolute path of .shoaku/task-patches/<explorerTaskIndex>.patch, or an empty string when it does not exist.',
+                    'Return plansMd as the complete plain ordered Markdown plan for goal/set. Update it only when the human goal or human tasks changed; if only Explorer tasks changed, preserve the previous plansMd exactly.'
                   ].join('\n')
                 }
               ],

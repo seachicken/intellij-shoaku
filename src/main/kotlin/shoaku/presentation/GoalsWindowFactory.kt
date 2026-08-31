@@ -684,7 +684,9 @@ private fun SessionTaskPane(
 
     val replyPlaceholder = "Ask Shoaku"
     val latestTaskComparison = remember(messages) {
-        messages.asReversed().firstNotNullOfOrNull { it.taskComparison }
+        messages.asReversed().firstNotNullOfOrNull {
+            it.taskComparison?.takeIf { comparison -> comparison.isNotEmpty() }
+        }
     }
     val displayedTaskComparisonRows = remember(latestTaskComparison, todoItems) {
         latestTaskComparison?.let { taskComparisonRows(it, todoItems) }
