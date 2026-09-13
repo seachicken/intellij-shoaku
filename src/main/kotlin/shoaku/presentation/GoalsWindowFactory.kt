@@ -728,8 +728,17 @@ private fun SessionTaskPane(
             ConversationNavigationCard(
                 isThinking = interactionResponse?.text == ThinkingMessage,
                 hasResponse = interactionResponse != null,
-                enabled = !session.sessionId.isNullOrBlank() && !session.appServerRemoteUrl.isNullOrBlank(),
-                onClick = { runCodexConversationCommand(project, session.sessionId, session.appServerRemoteUrl) }
+                enabled = !session.shoakuId.isNullOrBlank() &&
+                    !session.sessionId.isNullOrBlank() &&
+                    !session.appServerRemoteUrl.isNullOrBlank(),
+                onClick = {
+                    runCodexConversationCommand(
+                        project,
+                        session.shoakuId,
+                        session.sessionId,
+                        session.appServerRemoteUrl
+                    )
+                }
             )
         }
     }
@@ -940,7 +949,7 @@ private fun PlanComparisonRow(
     val hovered by interactionSource.collectIsHoveredAsState()
     var actionMenuExpanded by remember { mutableStateOf(false) }
     val background = when {
-        isActive -> TodoColors.currentTaskSurface
+        isActive -> Color.Transparent
         row.difference == TaskDifferenceAligned || row.difference == TaskDifferenceHumanOnly -> Color.Transparent
         row.difference == TaskDifferenceExplorerOnly -> Color.Transparent
         else -> Color.Transparent
@@ -1783,9 +1792,7 @@ private fun TaskListRow(
                     Modifier
                         .clip(activeGroupShape)
                         .background(
-                            if (isActiveGroup) {
-                                TodoColors.activeTaskGroupSurface
-                            } else if (groupHovered) {
+                            if (groupHovered && !isActiveGroup) {
                                 TodoColors.currentTaskSurface.copy(alpha = 0.55f)
                             } else {
                                 Color.Transparent
@@ -1810,10 +1817,10 @@ private fun TaskListRow(
         verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .background(if (state == TaskItemState.Current) TodoColors.currentTaskSurface else Color.Transparent)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                .background(Color.Transparent)
         ) {
             Row(
                 modifier = Modifier
@@ -2949,15 +2956,20 @@ private fun runImplementationForkCommand(project: Project?, sessionId: String?, 
     }
 }
 
-private fun runCodexConversationCommand(project: Project?, sessionId: String?, appServerRemoteUrl: String?) {
-    if (sessionId.isNullOrBlank() || appServerRemoteUrl.isNullOrBlank()) return
+private fun runCodexConversationCommand(
+    project: Project?,
+    shoakuId: String?,
+    sessionId: String?,
+    appServerRemoteUrl: String?
+) {
+    if (shoakuId.isNullOrBlank() || sessionId.isNullOrBlank() || appServerRemoteUrl.isNullOrBlank()) return
     val workingDirectory = project?.basePath ?: return
     val escapedSessionId = sessionId.replace("'", "'\"'\"'")
     val escapedRemoteUrl = appServerRemoteUrl.replace("'", "'\"'\"'")
 
     runCatching {
         val terminal = TerminalToolWindowManager.getInstance(project)
-            .createLocalShellWidget(workingDirectory, "Codex: Shoaku Conversation", true, true)
+            .createLocalShellWidget(workingDirectory, "Codex: $shoakuId", true, true)
         terminal.executeCommand("codex --remote '$escapedRemoteUrl' resume '$escapedSessionId'")
     }
 }
@@ -4339,9 +4351,8 @@ private object TodoColors {
     private val activityGlowStart = Color(0xFF38BDF8)
     private val activityGlowEnd = Color(0xFF2F6FED)
     val statusRunningText = namedColor("Label.foreground", 0xFFEAF4FF, 0xFF24538A)
-    val activeTaskGroupSurface = overlay(brandAccentPrimary.copy(alpha = 0.05f), sectionSurface)
     val activeTaskGroupHoverBorder = focusedBorder.copy(alpha = 0.72f)
-    val currentTaskSurface = overlay(brandAccentPrimary.copy(alpha = 0.09f), activeTaskGroupSurface)
+    val currentTaskSurface = overlay(brandAccentPrimary.copy(alpha = 0.09f), sectionSurface)
     val planChangedSurface = overlay(brandAccentPrimary.copy(alpha = 0.07f), sectionSurface)
     val taskResponseSurface = codeBlockChatSurface
     val taskResponseLabelText = blend(infoText, secondaryText, 0.72f)
@@ -4391,7 +4402,6 @@ private object TodoColors {
     fun goalRowSurface(state: TaskItemState, hovered: Boolean): Color = when {
         state == TaskItemState.Current && hovered ->
             overlay(hoverBackground.copy(alpha = 0.16f), currentTaskSurface)
-        state == TaskItemState.Current -> currentTaskSurface
         hovered -> overlay(hoverBackground.copy(alpha = 0.2f), Color.Transparent)
         else -> Color.Transparent
     }

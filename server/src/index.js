@@ -35,7 +35,7 @@ let initializeParams;
 let lspInputBuilder;
 let goalInputBuilder;
 let lists = [];
-let activeGoalItem;
+let activeShoakuId;
 
 function connectToAppServer() {
   return new Promise((resolve, reject) => {
@@ -191,6 +191,7 @@ function connectToAppServer() {
 async function startNewSession(goalItem) {
   const workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
   const shoakuId = basename(workDir);
+  activeShoakuId = shoakuId;
   chatByShoakuId.set(shoakuId, {
     messages: [],
     status: {
@@ -374,6 +375,7 @@ async function resumeSession(shoakuId) {
     return;
   }
 
+  activeShoakuId = shoakuId;
   chatByShoakuId.set(shoakuId, {
     messages: [],
     status: {
@@ -437,7 +439,6 @@ async function resumeSession(shoakuId) {
           appendChatHistory(sessionToShoaku.get(navigatorThreadId), turn.id, item);
         }
       }
-      activeGoalItem = findItemByShoakuId(lists, shoakuId);
       await syncShoakuLists(initializeParams.initializationOptions.filePath);
     });
   }
@@ -546,12 +547,12 @@ process.stdin.on('data', async (chunk) => {
 
           lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
           lspInputBuilder.onAgentInput(async (input) => {
-            if (!activeGoalItem?.shoakuId || !shoakuToSession.has(activeGoalItem.shoakuId)) {
+            if (!activeShoakuId || !shoakuToSession.has(activeShoakuId)) {
               return;
             }
 
             await sendAppRequest('thread/inject_items', {
-              threadId: shoakuToSession.get(activeGoalItem.shoakuId).navigatorThreadId,
+              threadId: shoakuToSession.get(activeShoakuId).navigatorThreadId,
               items: [
                 {
                   type: 'message',
@@ -569,11 +570,11 @@ process.stdin.on('data', async (chunk) => {
 
           goalInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 3000);
           goalInputBuilder.onAgentInput(async (input) => {
-            const shoakuId = activeGoalItem?.shoakuId;
-            if (!shoakuId) {
+            if (!activeShoakuId || !shoakuToSession.has(activeShoakuId)) {
               return;
             }
 
+            const shoakuId = activeShoakuId;
             await sendAppRequest('thread/inject_items', {
               threadId: shoakuToSession.get(shoakuId).navigatorThreadId,
               items: [
@@ -659,6 +660,7 @@ process.stdin.on('data', async (chunk) => {
                     return;
                   }
 
+                  const activeGoalItem = findItemByShoakuId(lists, shoakuId);
                   await sendAppRequest('thread/goal/set', {
                     threadId: shoakuToSession.get(shoakuId).explorerThreadId,
                     objective: [
@@ -810,6 +812,7 @@ async function watchGoalsFileUpdates() {
       prevValidGoalsFilePath = filePath;
 
       await syncShoakuLists(filePath);
+      const activeGoalItem = findItemByShoakuId(lists, activeShoakuId);
 
       if (goalInputBuilder && activeGoalItem) {
         const { messages, tokenUsage, status, ...content } = activeGoalItem;
@@ -836,7 +839,7 @@ async function watchExplorerGoalsFileUpdates(filePath) {
   try {
     for await (const event of watch(filePath)) {
       const explorerShoakuId = basename(dirname(dirname(filePath)));
-      if (!activeGoalItem || explorerShoakuId !== activeGoalItem.shoakuId) {
+      if (explorerShoakuId !== activeShoakuId) {
         continue;
       }
 
