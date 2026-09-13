@@ -45,6 +45,33 @@ private data class ReviewDiffTabState(
 
 private val reviewDiffTabs = WeakHashMap<Project, ReviewDiffTabState>()
 
+/**
+ * Opens a request chain so IntelliJ creates its standard chain diff toolbar.
+ * That toolbar includes the file picker, current/total file count, and
+ * previous/next file actions.
+ */
+private fun openDiffChain(
+    project: Project,
+    title: String,
+    requests: List<SimpleDiffRequest>
+) {
+    if (requests.isEmpty()) return
+
+    val fileEditorManager = FileEditorManager.getInstance(project)
+    reviewDiffTabs.remove(project)?.file?.let { previousFile ->
+        if (fileEditorManager.isFileOpen(previousFile)) {
+            fileEditorManager.closeFile(previousFile)
+        }
+    }
+
+    val diffFile = ChainDiffVirtualFile(
+        SimpleDiffRequestChain(requests, 0),
+        title
+    )
+    reviewDiffTabs[project] = ReviewDiffTabState(diffFile)
+    fileEditorManager.openFile(diffFile, true)
+}
+
 internal fun openReviewDiff(
     project: Project,
     temporaryWorkspace: String?,
@@ -78,7 +105,10 @@ internal fun openReviewDiff(
             fileComments.firstOrNull()?.line ?: 1
         }
         SimpleDiffRequest(
-            "Final Check: ${projectFile.name}",
+            // The request title is used by IntelliJ's file picker in the
+            // chain toolbar. Keep the relative path to disambiguate files
+            // with the same name in different directories.
+            "Final Check: $path",
             contentFactory.create(project, projectText, projectFile),
             contentFactory.create(project, workspaceText, workspaceFile),
             "Project",
@@ -92,19 +122,7 @@ internal fun openReviewDiff(
     project.service<ShoakuSettings>().viewModel.selectedReviewLocation =
         ReviewLocation(target.path, target.line ?: comments.firstOrNull { it.path == target.path }?.line ?: 1)
 
-    val fileEditorManager = FileEditorManager.getInstance(project)
-    reviewDiffTabs.remove(project)?.file?.let { previousFile ->
-        if (fileEditorManager.isFileOpen(previousFile)) {
-            fileEditorManager.closeFile(previousFile)
-        }
-    }
-
-    val diffFile = ChainDiffVirtualFile(
-        SimpleDiffRequestChain(requests, 0),
-        "Review Diff"
-    )
-    reviewDiffTabs[project] = ReviewDiffTabState(diffFile)
-    fileEditorManager.openFile(diffFile, true)
+    openDiffChain(project, "Review Diff", requests)
 }
 
 private val DirectoryDiffExcludedNames = setOf(
@@ -175,13 +193,7 @@ internal fun openProjectDirectoryDiff(project: Project, explorerTaskPath: String
                     "Explorer"
                 )
             }
-            val fileEditorManager = FileEditorManager.getInstance(project)
-            reviewDiffTabs.remove(project)?.file?.let { previousFile ->
-                if (fileEditorManager.isFileOpen(previousFile)) fileEditorManager.closeFile(previousFile)
-            }
-            val diffFile = ChainDiffVirtualFile(SimpleDiffRequestChain(requests, 0), "Explorer Diff")
-            reviewDiffTabs[project] = ReviewDiffTabState(diffFile)
-            fileEditorManager.openFile(diffFile, true)
+            openDiffChain(project, "Explorer Diff", requests)
         }
     }
 }

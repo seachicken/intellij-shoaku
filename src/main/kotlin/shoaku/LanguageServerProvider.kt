@@ -74,6 +74,7 @@ data class Item(
     val children: List<Item> = emptyList(),
     val shoakuId: String? = null,
     val sessionId: String? = null,
+    val appServerRemoteUrl: String? = null,
     val messages: List<Message>? = emptyList(),
     val tokenUsage: TokenUsageUi? = null,
     val status: AgentStatusUi? = null,

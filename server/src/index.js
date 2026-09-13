@@ -2,10 +2,12 @@
 
 import { homedir } from 'node:os';
 import { mkdir, mkdtemp, readFile, rm, stat, watch, writeFile } from 'node:fs/promises';
+import { createConnection } from 'node:net';
 import { basename, dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import child_process, { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import WebSocket from 'ws';
 import YAML from 'yaml';
 import AgentInputBuilder, { inputType } from './agent-input-builder.js';
 import { renderSummary, renderSummaryDiff } from './diff-snippet.js';
@@ -13,8 +15,9 @@ import { cleanupStaleBranches } from './git.js';
 import parser from './parser.js';
 
 const exec = promisify(child_process.exec);
-const appServer = spawn('codex', ['app-server'], {
-  stdio: ['pipe', 'pipe', 'pipe'],
+const appServerSocketPath = join(tmpdir(), `shoaku-app-server-${process.pid}.sock`);
+const appServer = spawn('codex', ['app-server', '--listen', `unix://${appServerSocketPath}`], {
+  stdio: ['ignore', 'ignore', 'pipe'],
   env: {
     ...process.env,
     RUST_LOG: 'warn'
@@ -26,6 +29,7 @@ const sessionToShoaku = new Map();
 const shoakuToSession = new Map();
 const chatByShoakuId = new Map();
 
+let appClient;
 let config;
 let initializeParams;
 let lspInputBuilder;
@@ -33,133 +37,156 @@ let goalInputBuilder;
 let lists = [];
 let activeGoalItem;
 
-let appBuf = Buffer.alloc(0);
-appServer.stdout.on('data', async (chunk) => {
-  appBuf = Buffer.concat([appBuf, chunk]);
+function connectToAppServer() {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + 10_000;
 
-  let newlineIdx;
-  while ((newlineIdx = appBuf.indexOf('\n')) !== -1) {
-    const line = appBuf.slice(0, newlineIdx).toString('utf-8');
-    appBuf = appBuf.slice(newlineIdx + 1);
-
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      logError(`Received non-JSON message from app server: ${line}`);
-      continue;
-    }
-    const shoakuId = sessionToShoaku.get(message.params?.threadId)
-    const logPrefix = shoakuToSession.get(shoakuId)?.navigatorThreadId === message.params?.threadId ? '[navigator] ' : message.params?.threadId ? '[explorer] ' : '';
-    logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.values()].flatMap((v) => [...v.keys()])}`);
-
-    if (message.id != null && pendingRequests.has(message.id)) {
-      const { resolve, reject } = pendingRequests.get(message.id);
-      pendingRequests.delete(message.id);
-      if (message.error) {
-        reject(new Error(JSON.stringify(message.error)));
-      } else {
-        resolve(message);
-      }
-    }
-
-    switch (message.method) {
-      case 'thread/status/changed': {
-        const shoakuId = sessionToShoaku.get(message.params.threadId);
-        if (!shoakuId) {
-          break;
-        }
-
-        const status = chatByShoakuId.get(shoakuId).status;
-        const session = shoakuToSession.get(shoakuId);
-        if (message.params.threadId === session.navigatorThreadId) {
-          status.navigator = message.params.status.type;
-        } else {
-          status.explorer = message.params.status.type;
-        }
-
-        await syncShoakuLists(initializeParams.initializationOptions.filePath);
-        break;
-      }
-
-      case 'thread/tokenUsage/updated': {
-        const shoakuId = sessionToShoaku.get(message.params.threadId);
-        if (!shoakuId) {
-          break;
-        }
-
-        const usage = chatByShoakuId.get(shoakuId).tokenUsage;
-        const session = shoakuToSession.get(shoakuId);
-        if (message.params.threadId === session.navigatorThreadId) {
-          usage.navigatorTokens = message.params.tokenUsage.total.totalTokens;
-
-          lspInputBuilder.ingest({
-            type: inputType.TOKEN_USAGE,
-            lastInputTokens: message.params.tokenUsage.last.inputTokens
-          });
-          goalInputBuilder.ingest({
-            type: inputType.TOKEN_USAGE,
-            lastInputTokens: message.params.tokenUsage.last.inputTokens
-          });
-        } else {
-          usage.explorerTokens = message.params.tokenUsage.total.totalTokens;
-        }
-
-        await syncShoakuLists(initializeParams.initializationOptions.filePath);
-
+    const attempt = () => {
+      const client = new WebSocket('ws://localhost/rpc', {
+        createConnection: () => createConnection({ path: appServerSocketPath }),
+        perMessageDeflate: false
+      });
+    
+      client.on('message', async (data) => {
+        let message;
         try {
-          const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
-          metaData.maxTokens = usage.maxTokens;
-          metaData.navigator.tokenUsage = usage.navigatorTokens;
-          metaData.explorer.tokenUsage = usage.explorerTokens;
-          await writeFile(join(sessionsDir, shoakuId, 'meta.json'), JSON.stringify(metaData, null, 2));
-        } catch (e) {
-          if (e.code !== 'ENOENT') {
-            throw e;
-          }
+          message = JSON.parse(data.toString());
+        } catch {
+          logError(`Received non-JSON message from app server: ${data.toString()}`);
+          return;
         }
-        break;
-      }
-
-      case 'item/started':
-        if (message.params.item.type === 'contextCompaction') {
-          message.params.item.type = 'contextCompactionStarted';
-          appendChatHistory(sessionToShoaku.get(message.params.threadId), message.params.turnId, message.params.item);
-          await syncShoakuLists(initializeParams.initializationOptions.filePath);
-        }
-        break;
-
-      case 'item/completed':
-        if (pendingTurns.get(message.params.threadId)?.has(message.params.turnId)) {
-          const { id, callbacks } = pendingTurns.get(message.params.threadId).get(message.params.turnId);
-          callbacks?.onItemCompleted(id, message.params)
-        }
-
-        // `thread/compact/start` does not return a `turnId`, so process it here instead of adding it to `pendingTurns`.
-        if (message.params.item.type === 'contextCompaction') {
-          appendChatHistory(sessionToShoaku.get(message.params.threadId), message.params.turnId, message.params.item);
-          await syncShoakuLists(initializeParams.initializationOptions.filePath);
-        }
-        break;
-
-      case 'turn/completed':
-        if (pendingTurns.get(message.params.threadId)?.has(message.params.turn.id)) {
-          const turns = pendingTurns.get(message.params.threadId);
-          const { resolve, reject } = turns.get(message.params.turn.id);
-          turns.delete(message.params.turn.id);
-          if (turns.size === 0) {
-            pendingTurns.delete(message.params.threadId);
-          }
+    
+        const shoakuId = sessionToShoaku.get(message.params?.threadId)
+        const logPrefix = shoakuToSession.get(shoakuId)?.navigatorThreadId === message.params?.threadId ? '[navigator] ' : message.params?.threadId ? '[explorer] ' : '';
+        logInfo(`${logPrefix}AS-> ${JSON.stringify(message)}, pendingRequests: ${[...pendingRequests.keys()]}, pendingTurns: ${[...pendingTurns.values()].flatMap((v) => [...v.keys()])}`);
+    
+        if (message.id != null && pendingRequests.has(message.id)) {
+          const { resolve, reject } = pendingRequests.get(message.id);
+          pendingRequests.delete(message.id);
           if (message.error) {
-            reject(message.error);
+            reject(new Error(JSON.stringify(message.error)));
           } else {
-            resolve(message.result);
+            resolve(message);
           }
         }
-        break;
-    }
-  }
-});
+    
+        switch (message.method) {
+          case 'thread/status/changed': {
+            const shoakuId = sessionToShoaku.get(message.params.threadId);
+            if (!shoakuId) {
+              break;
+            }
+    
+            const status = chatByShoakuId.get(shoakuId).status;
+            const session = shoakuToSession.get(shoakuId);
+            if (message.params.threadId === session.navigatorThreadId) {
+              status.navigator = message.params.status.type;
+            } else {
+              status.explorer = message.params.status.type;
+            }
+    
+            await syncShoakuLists(initializeParams.initializationOptions.filePath);
+            break;
+          }
+    
+          case 'thread/tokenUsage/updated': {
+            const shoakuId = sessionToShoaku.get(message.params.threadId);
+            if (!shoakuId) {
+              break;
+            }
+    
+            const usage = chatByShoakuId.get(shoakuId).tokenUsage;
+            const session = shoakuToSession.get(shoakuId);
+            if (message.params.threadId === session.navigatorThreadId) {
+              usage.navigatorTokens = message.params.tokenUsage.total.totalTokens;
+    
+              lspInputBuilder.ingest({
+                type: inputType.TOKEN_USAGE,
+                lastInputTokens: message.params.tokenUsage.last.inputTokens
+              });
+              goalInputBuilder.ingest({
+                type: inputType.TOKEN_USAGE,
+                lastInputTokens: message.params.tokenUsage.last.inputTokens
+              });
+            } else {
+              usage.explorerTokens = message.params.tokenUsage.total.totalTokens;
+            }
+    
+            await syncShoakuLists(initializeParams.initializationOptions.filePath);
+    
+            try {
+              const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
+              metaData.maxTokens = usage.maxTokens;
+              metaData.navigator.tokenUsage = usage.navigatorTokens;
+              metaData.explorer.tokenUsage = usage.explorerTokens;
+              await writeFile(join(sessionsDir, shoakuId, 'meta.json'), JSON.stringify(metaData, null, 2));
+            } catch (e) {
+              if (e.code !== 'ENOENT') {
+                throw e;
+              }
+            }
+            break;
+          }
+    
+          case 'item/started':
+            if (message.params.item.type === 'contextCompaction') {
+              message.params.item.type = 'contextCompactionStarted';
+              appendChatHistory(sessionToShoaku.get(message.params.threadId), message.params.turnId, message.params.item);
+              await syncShoakuLists(initializeParams.initializationOptions.filePath);
+            }
+            break;
+    
+          case 'item/completed':
+            if (pendingTurns.get(message.params.threadId)?.has(message.params.turnId)) {
+              const { id, callbacks } = pendingTurns.get(message.params.threadId).get(message.params.turnId);
+              callbacks?.onItemCompleted(id, message.params)
+            }
+    
+            // `thread/compact/start` does not return a `turnId`, so process it here instead of adding it to `pendingTurns`.
+            if (message.params.item.type === 'contextCompaction') {
+              appendChatHistory(sessionToShoaku.get(message.params.threadId), message.params.turnId, message.params.item);
+              await syncShoakuLists(initializeParams.initializationOptions.filePath);
+            }
+            break;
+    
+          case 'turn/completed':
+            if (pendingTurns.get(message.params.threadId)?.has(message.params.turn.id)) {
+              const turns = pendingTurns.get(message.params.threadId);
+              const { resolve, reject } = turns.get(message.params.turn.id);
+              turns.delete(message.params.turn.id);
+              if (turns.size === 0) {
+                pendingTurns.delete(message.params.threadId);
+              }
+              if (message.error) {
+                reject(message.error);
+              } else {
+                resolve(message.result);
+              }
+            }
+            break;
+        }
+      });
+    
+      client.once('open', () => {
+        appClient = client;
+        resolve(client);
+      });
+    
+      client.once('error', (err) => {
+        client.close();
+
+        if (Date.now() >= deadline) {
+          reject(new Error('Failed to connect to app server within 10 seconds.'));
+          return;
+        }
+
+        setTimeout(attempt, 1_000);
+      });
+    };
+
+    attempt();
+  });
+}
 
 async function startNewSession(goalItem) {
   const workDir = await mkdtemp(join(tmpdir(), 'shoaku-'));
@@ -432,6 +459,7 @@ async function syncShoakuLists(filePath) {
   for (const goal of lists) {
     if (goal.shoakuId) {
       goal.sessionId = shoakuToSession.get(goal.shoakuId)?.navigatorThreadId;
+      goal.appServerRemoteUrl = `unix://${appServerSocketPath}`;
       goal.messages = chatByShoakuId.get(goal.shoakuId)?.messages;
       goal.tokenUsage = chatByShoakuId.get(goal.shoakuId)?.tokenUsage;
       goal.status = chatByShoakuId.get(goal.shoakuId)?.status;
@@ -496,6 +524,8 @@ process.stdin.on('data', async (chunk) => {
 
       switch (message.method) {
         case 'initialize':
+          await connectToAppServer();
+
           await mkdir(shoakuDir, { recursive: true });
           await mkdir(sessionsDir, { recursive: true });
           const data = [
@@ -649,7 +679,7 @@ process.stdin.on('data', async (chunk) => {
             );
           });
 
-          appServer.stdin.write(JSON.stringify(buildAppRequest('initialize', {
+          await sendAppRequest('initialize', {
             clientInfo: {
               name: 'shoaku_intellij',
               title: 'Shoaku for IntelliJ',
@@ -658,7 +688,7 @@ process.stdin.on('data', async (chunk) => {
             capabilities: {
               optOutNotificationMethods: ['item/agentMessage/delta']
             }
-          })) + '\n');
+          });
 
           process.stdout.write(buildResponse(message.id, {
             capabilities: {
@@ -750,7 +780,8 @@ process.stdin.on('data', async (chunk) => {
 });
 
 process.stdin.on('end', () => {
-  appServer.stdin.end();
+  appClient?.close();
+  appServer.kill();
 });
 
 async function createDiff(taskIndex, tempWorkspace) {
@@ -903,7 +934,7 @@ function sendAppRequest(method, params) {
   const req = buildAppRequest(method, params);
   return new Promise((resolve, reject) => {
     pendingRequests.set(req.id, { resolve, reject });
-    appServer.stdin.write(JSON.stringify(req) + '\n');
+    appClient?.send(JSON.stringify(req));
   });
 }
 

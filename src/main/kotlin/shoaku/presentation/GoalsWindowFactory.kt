@@ -134,8 +134,6 @@ private fun MyToolWindowContent(
     val vm = remember { viewModel }
     val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
     var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
-    val instructionValues = remember { mutableStateMapOf<SessionKey, TextFieldValue>() }
-    val expandedConversationKeys = remember { mutableStateMapOf<SessionKey, Boolean>() }
     val goals = vm.items.filter { it.shoakuId != null }
     val goalFilter = vm.goalFilter
     val openSessions = openSessionKeys.mapNotNull { key -> goals.firstOrNull { it.sessionKey == key } }
@@ -175,8 +173,6 @@ private fun MyToolWindowContent(
         if (selectedSessionKey != null && selectedSessionKey !in currentKeys) {
             selectSession(null)
         }
-        instructionValues.keys.retainAll(currentKeys)
-        expandedConversationKeys.keys.retainAll(currentKeys)
     }
 
     Column(
@@ -232,10 +228,6 @@ private fun MyToolWindowContent(
                 session = selectedSession,
                 viewModel = vm,
                 project = project,
-                instructionValue = instructionValues[selectedSession.sessionKey] ?: TextFieldValue(),
-                onInstructionValueChange = { instructionValues[selectedSession.sessionKey] = it },
-                conversationExpanded = expandedConversationKeys[selectedSession.sessionKey] == true,
-                onConversationExpandedChange = { expandedConversationKeys[selectedSession.sessionKey] = it },
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
             )
         }
@@ -487,10 +479,6 @@ private fun SessionDetailContent(
     session: Item,
     viewModel: ShoakuViewModel,
     project: Project? = null,
-    instructionValue: TextFieldValue,
-    onInstructionValueChange: (TextFieldValue) -> Unit,
-    conversationExpanded: Boolean,
-    onConversationExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val finalCheckState = remember(session.shoakuId) { FinalCheckDisplayState() }
@@ -499,10 +487,6 @@ private fun SessionDetailContent(
         viewModel = viewModel,
         project = project,
         finalCheckState = finalCheckState,
-        instructionValue = instructionValue,
-        onInstructionValueChange = onInstructionValueChange,
-        conversationExpanded = conversationExpanded,
-        onConversationExpandedChange = onConversationExpandedChange,
         modifier = modifier
     )
 }
@@ -513,10 +497,6 @@ private fun SessionTaskPane(
     viewModel: ShoakuViewModel,
     project: Project?,
     finalCheckState: FinalCheckDisplayState,
-    instructionValue: TextFieldValue,
-    onInstructionValueChange: (TextFieldValue) -> Unit,
-    conversationExpanded: Boolean,
-    onConversationExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val todoItems = session.children.filter { it.checked != null }
@@ -682,7 +662,6 @@ private fun SessionTaskPane(
         }
     }
 
-    val replyPlaceholder = "Ask Shoaku"
     val latestTaskComparison = remember(messages) {
         messages.asReversed().firstNotNullOfOrNull {
             it.taskComparison?.takeIf { comparison -> comparison.isNotEmpty() }
@@ -696,18 +675,6 @@ private fun SessionTaskPane(
         it.humanTask?.content == activeItem?.content
     }
     val activeExplorerTask = activeComparisonRow?.explorerTasks?.firstOrNull()
-    val activeExplorerTaskIndex = activeExplorerTask?.taskIndex()
-    val activeTaskPatchPath = activeExplorerTask?.effectivePatchPath(session.temporaryWorkspace)
-    val sendReply = {
-        replyState.thinking.value = true
-        replyState.startMessageCount.value = messages.size
-        sendSessionReply(
-            project = project,
-            shoakuId = session.shoakuId,
-            instruction = instructionValue.text
-        )
-        onInstructionValueChange(TextFieldValue())
-    }
     val requestDiffReview: (Int) -> Unit = { explorerTaskIndex ->
         val shoakuId = session.shoakuId
         if (shoakuId != null) {
@@ -722,24 +689,11 @@ private fun SessionTaskPane(
         modifier = modifier
             .background(TodoColors.sectionSurface, RoundedCornerShape(8.dp))
             .padding(TodoMetrics.horizontalPadding)
-            .onPreviewKeyEvent { event ->
-                if (
-                    conversationExpanded &&
-                    event.type == KeyEventType.KeyDown &&
-                    event.key == Key.Escape
-                ) {
-                    onConversationExpandedChange(false)
-                    true
-                } else {
-                    false
-                }
-            }
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (!conversationExpanded) {
             SessionSectionHeader(
                 title = "Tasks",
                 trailing = {
@@ -762,10 +716,10 @@ private fun SessionTaskPane(
                 humanTasks = todoItems,
                 temporaryWorkspace = session.temporaryWorkspace,
                 activeHumanTaskContent = activeItem?.content,
-                runImplementationCommandEnabled = !session.sessionId.isNullOrBlank(),
+                runImplementationCommandEnabled = !session.sessionId.isNullOrBlank() && !session.appServerRemoteUrl.isNullOrBlank(),
                 onOpenCodeDiff = requestDiffReview,
                 onRunImplementationCommand = { task ->
-                    runImplementationForkCommand(project, session.sessionId, task)
+                    runImplementationForkCommand(project, session.sessionId, session.appServerRemoteUrl, task)
                 },
                 modifier = Modifier
                     .weight(1f)
@@ -774,40 +728,9 @@ private fun SessionTaskPane(
             ConversationNavigationCard(
                 isThinking = interactionResponse?.text == ThinkingMessage,
                 hasResponse = interactionResponse != null,
-                onClick = { onConversationExpandedChange(true) }
+                enabled = !session.sessionId.isNullOrBlank() && !session.appServerRemoteUrl.isNullOrBlank(),
+                onClick = { runCodexConversationCommand(project, session.sessionId, session.appServerRemoteUrl) }
             )
-            }
-            if (conversationExpanded) {
-                key(session.sessionKey) {
-                    ExpandedConversationPane(
-                        messages = messages,
-                        isThinking = interactionResponse?.text == ThinkingMessage,
-                        contextLabel = activeItem?.content ?: ReviewTaskTitle,
-                        onExpandedChange = onConversationExpandedChange,
-                        instructionValue = instructionValue,
-                        onInstructionValueChange = onInstructionValueChange,
-                        enabled = session.shoakuId != null,
-                        placeholder = replyPlaceholder,
-                        onSend = sendReply,
-                        codeDiffEnabled = !activeTaskPatchPath.isNullOrBlank() && activeExplorerTaskIndex != null,
-                        runImplementationCommandEnabled = !session.sessionId.isNullOrBlank(),
-                        onOpenCodeDiff = {
-                            val explorerTaskIndex = activeExplorerTaskIndex
-                            if (explorerTaskIndex != null) {
-                                requestDiffReview(explorerTaskIndex)
-                            }
-                        },
-                        onRunImplementationCommand = {
-                            activeItem?.content?.let { task ->
-                                runImplementationForkCommand(project, session.sessionId, task)
-                            }
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
-                }
-            }
         }
     }
 }
@@ -1514,6 +1437,7 @@ private fun UnifiedTaskLine(
 private fun ConversationNavigationCard(
     isThinking: Boolean,
     hasResponse: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -1525,7 +1449,12 @@ private fun ConversationNavigationCard(
             .background(if (hovered) TodoColors.currentTaskSurface else TodoColors.taskResponseSurface)
             .border(1.dp, TodoColors.sectionDivider, RoundedCornerShape(7.dp))
             .hoverable(interactionSource)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .clickable(
+                enabled = enabled,
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
             .padding(horizontal = 10.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1540,12 +1469,13 @@ private fun ConversationNavigationCard(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
-            Text("Conversation", color = TodoColors.primaryText, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Text("Open in Codex CLI", color = TodoColors.primaryText, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             Text(
                 text = when {
+                    !enabled -> "Waiting for the Codex session"
                     isThinking -> "Shoaku is thinking…"
-                    hasResponse -> "Response available"
-                    else -> "Ask Shoaku or review the current task"
+                    hasResponse -> "Continue the conversation in Terminal"
+                    else -> "Start the conversation in Terminal"
                 },
                 color = TodoColors.secondaryText,
                 fontSize = 9.sp,
@@ -1555,7 +1485,7 @@ private fun ConversationNavigationCard(
         }
         Icon(
             key = AllIconsKeys.Actions.Forward,
-            contentDescription = "Open Conversation",
+            contentDescription = "Open in Codex CLI",
             tint = TodoColors.linkText,
             modifier = Modifier.size(16.dp)
         )
@@ -3005,16 +2935,30 @@ private fun sendSessionReply(
     }
 }
 
-private fun runImplementationForkCommand(project: Project?, sessionId: String?, task: String) {
-    if (sessionId.isNullOrBlank()) return
+private fun runImplementationForkCommand(project: Project?, sessionId: String?, appServerRemoteUrl: String?, task: String) {
+    if (sessionId.isNullOrBlank() || appServerRemoteUrl.isNullOrBlank()) return
     val escapedTask = task.replace("'", "'\\\"'\\\"'")
-    val command = "codex fork $sessionId 'Implement: $escapedTask'"
+    val escapedRemoteUrl = appServerRemoteUrl.replace("'", "'\\\"'\\\"'")
+    val command = "codex --remote '$escapedRemoteUrl' fork $sessionId 'Implement: $escapedTask'"
     val workingDirectory = project?.basePath ?: return
 
     runCatching {
         val terminal = TerminalToolWindowManager.getInstance(project)
             .createLocalShellWidget(workingDirectory, "Codex: Shoaku", true, true)
         terminal.executeCommand(command)
+    }
+}
+
+private fun runCodexConversationCommand(project: Project?, sessionId: String?, appServerRemoteUrl: String?) {
+    if (sessionId.isNullOrBlank() || appServerRemoteUrl.isNullOrBlank()) return
+    val workingDirectory = project?.basePath ?: return
+    val escapedSessionId = sessionId.replace("'", "'\"'\"'")
+    val escapedRemoteUrl = appServerRemoteUrl.replace("'", "'\"'\"'")
+
+    runCatching {
+        val terminal = TerminalToolWindowManager.getInstance(project)
+            .createLocalShellWidget(workingDirectory, "Codex: Shoaku Conversation", true, true)
+        terminal.executeCommand("codex --remote '$escapedRemoteUrl' resume '$escapedSessionId'")
     }
 }
 

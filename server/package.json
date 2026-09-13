@@ -18,6 +18,7 @@
   },
   "description": "Agent server for the Shoaku AI coding assistant",
   "dependencies": {
+    "ws": "^8.21.3",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
