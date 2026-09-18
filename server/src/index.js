@@ -716,7 +716,15 @@ process.stdin.on('data', async (chunk) => {
 
         case 'shoaku/startSession':
           if (message.params.shoakuId) {
-            resumeSession(message.params.shoakuId);
+            try {
+              await resumeSession(message.params.shoakuId);
+            } catch (error) {
+              if (error.message.includes('already has an active writer')) {
+                logWarn(`Session ${message.params.shoakuId} is already open in another Codex client.`);
+                break;
+              }
+              throw error;
+            }
           }
           break;
 
