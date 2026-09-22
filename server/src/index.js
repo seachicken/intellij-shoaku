@@ -716,7 +716,9 @@ process.stdin.on('data', async (chunk) => {
 
         case 'shoaku/startSession':
           if (message.params.shoakuId) {
-            resumeSession(message.params.shoakuId);
+            resumeSession(message.params.shoakuId).catch(e => {
+              logWarn(`Failed to resume session for shoakuId ${message.params.shoakuId}: ${e}`);
+            });
           }
           break;
 
