@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
@@ -442,7 +443,6 @@ private fun SessionListContent(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             itemsIndexed(filteredGoals) { index, session ->
-                val todoItems = session.children.filter { it.checked != null }
                 val state = when {
                     session.checked == true -> TaskItemState.Completed
                     index == activeSessionIndex -> TaskItemState.Current
@@ -450,15 +450,13 @@ private fun SessionListContent(
                 }
                 TodoRow(
                     title = session.content,
-                    subtitle = "${todoItems.size} tasks",
+                    subtitle = session.workflow?.detail ?: if (session.checked == true) "Outcome ready" else "Plan not started",
                     meta = null,
                     state = state,
                     hoverable = true,
                     onClick = if (session.shoakuId != null) ({ onOpenSession(session) }) else null,
                     trailing = {
-                        val status = session.status
-                            ?.toSummaryStatusState()
-                            ?.takeIf { it.tone != AgentStatusTone.Hidden }
+                        val status = session.workflow?.toWorkflowDisplayState()
                         if (status != null) {
                             StatusPill(
                                 label = status.label,
@@ -481,14 +479,129 @@ private fun SessionDetailContent(
     project: Project? = null,
     modifier: Modifier = Modifier
 ) {
-    val finalCheckState = remember(session.shoakuId) { FinalCheckDisplayState() }
     SessionTaskPane(
         session = session,
         viewModel = viewModel,
         project = project,
-        finalCheckState = finalCheckState,
         modifier = modifier
     )
+}
+
+private data class ImplementationTask(val title: String, val completed: Boolean)
+private data class ImplementationArtifacts(val tasks: List<ImplementationTask>, val hasPlan: Boolean = false)
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun ImplementationDocumentsPane(session: Item, project: Project?, modifier: Modifier = Modifier) {
+    val workspace = session.temporaryWorkspace
+    val scope = rememberCoroutineScope()
+    var openingWorktree by remember(workspace) { mutableStateOf(false) }
+    var worktreeOpenError by remember(workspace) { mutableStateOf<String?>(null) }
+    val artifacts by produceState(ImplementationArtifacts(emptyList()), workspace) {
+        val root = workspace?.let { Path.of(it).resolve(".shoaku") } ?: return@produceState
+        while (true) {
+            value = withContext(Dispatchers.IO) {
+                fun readTasks(path: Path): List<ImplementationTask> = runCatching {
+                    var inCodeBlock = false
+                    var fenceCharacter: Char? = null
+                    Files.readString(path).lineSequence().mapNotNull { line ->
+                        val fence = Regex("""^\s*(`{3,}|~{3,}).*$""").matchEntire(line)
+                        if (fence != null) {
+                            val character = fence.groupValues[1].first()
+                            if (!inCodeBlock) {
+                                inCodeBlock = true
+                                fenceCharacter = character
+                            } else if (character == fenceCharacter) {
+                                inCodeBlock = false
+                                fenceCharacter = null
+                            }
+                            return@mapNotNull null
+                        }
+                        if (inCodeBlock) return@mapNotNull null
+                        Regex("""^\s*(?:[-*+]|\d+[.)])\s+\[([ xX])]\s+(.+)$""").matchEntire(line)?.let {
+                            ImplementationTask(it.groupValues[2], it.groupValues[1].equals("x", ignoreCase = true))
+                        }
+                    }.toList()
+                }.getOrDefault(emptyList())
+                // Navigator owns task wording/order. Explorer only contributes
+                // progress for matching tasks; its extra rows must not replace the plan.
+                val progress = readTasks(root.resolve("goals.md")).groupBy { it.title.trim() }
+                val occurrences = mutableMapOf<String, Int>()
+                val tasks = readTasks(root.resolve("PLANS.md")).map { task ->
+                    val title = task.title.trim()
+                    val occurrence = occurrences.getOrDefault(title, 0)
+                    occurrences[title] = occurrence + 1
+                    val completed = progress[title]?.getOrNull(occurrence)?.completed ?: task.completed
+                    task.copy(completed = completed)
+                }
+                ImplementationArtifacts(tasks, Files.isRegularFile(root.resolve("PLANS.md")))
+            }
+            delay(1500)
+        }
+    }
+    val tasks = artifacts.tasks
+    val currentIndex = tasks.indexOfFirst { !it.completed }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(when {
+            !artifacts.hasPlan -> "The plan will appear here when ready."
+            tasks.isEmpty() -> "No steps listed in the plan yet."
+            else -> "${tasks.count { it.completed }} of ${tasks.size} steps complete"
+        }, color = TodoColors.secondaryText, fontSize = 12.sp)
+        Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            tasks.forEachIndexed { index, task ->
+                TodoRow(title = task.title, subtitle = null, meta = null, state = when {
+                    task.completed -> TaskItemState.Completed
+                    index == currentIndex && session.workflow?.stage == "implementing" -> TaskItemState.Current
+                    else -> TaskItemState.Pending
+                })
+            }
+        }
+        val canOpenWorktree = project != null && !workspace.isNullOrBlank() && !openingWorktree
+        fun openImplementation(inTerminal: Boolean) {
+            val sourceProject = project ?: return
+            val workspacePath = workspace ?: return
+            openingWorktree = true
+            worktreeOpenError = null
+            scope.launch {
+                try {
+                    if (inTerminal) {
+                        WorktreeProjectOpener.openTerminal(sourceProject, workspacePath)
+                    } else if (WorktreeProjectOpener.open(sourceProject, workspacePath) == null) {
+                        worktreeOpenError = "The IDE did not open the implementation. You can try again."
+                    }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    worktreeOpenError = error.message ?: "Could not open the implementation."
+                } finally {
+                    openingWorktree = false
+                }
+            }
+        }
+        SessionSectionHeader(title = "Implementation")
+        DefaultButton(
+            onClick = { if (project != null && workspace != null) openCommitReview(project, workspace) },
+            enabled = project != null && !workspace.isNullOrBlank(),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Review outcome") }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.weight(1f)) {
+                Tooltip(tooltip = { Text("Open the implementation in a separate IDE window") }) {
+                    SessionActionRow(title = "Open in IDE", iconKey = AllIconsKeys.General.OpenDisk,
+                        enabled = canOpenWorktree, onClick = { openImplementation(false) })
+                }
+            }
+            Box(Modifier.weight(1f)) {
+                Tooltip(tooltip = { Text("Open a terminal in this IDE at the implementation directory") }) {
+                    SessionActionRow(title = "Open terminal", iconKey = AllIconsKeys.Actions.Execute,
+                        enabled = canOpenWorktree, onClick = { openImplementation(true) })
+                }
+            }
+        }
+        if (openingWorktree) Text("Opening implementation…", color = TodoColors.secondaryText, fontSize = 12.sp)
+        worktreeOpenError?.let { Text(it, color = TodoColors.secondaryText, fontSize = 12.sp) }
+    }
 }
 
 @Composable
@@ -496,36 +609,8 @@ private fun SessionTaskPane(
     session: Item,
     viewModel: ShoakuViewModel,
     project: Project?,
-    finalCheckState: FinalCheckDisplayState,
     modifier: Modifier = Modifier
 ) {
-    val todoItems = session.children.filter { it.checked != null }
-    val remainingCount = todoItems.count { it.checked == false }
-    val isChecklistComplete = todoItems.isNotEmpty() && remainingCount == 0
-    val isFinalCheckActive = isChecklistComplete
-    val activeItemIndex = remember(todoItems) { todoItems.indexOfFirst { it.checked == false } }
-    val activeItem = todoItems.getOrNull(activeItemIndex)
-    val activeTaskKey = ActiveTaskKey(activeItemIndex, activeItem?.content)
-    val messages = session.messages.orEmpty()
-    var taskMessageBoundary by remember(session.shoakuId) {
-        mutableStateOf(ActiveTaskMessageBoundary(activeTaskKey, 0))
-    }
-    val activeTaskMessages = remember(taskMessageBoundary, activeTaskKey, messages) {
-        messagesForActiveTask(
-            boundary = taskMessageBoundary,
-            activeTaskKey = activeTaskKey,
-            messages = messages
-        )
-    }
-    SideEffect {
-        if (
-            taskMessageBoundary.activeTaskKey != activeTaskKey ||
-            messages.size < taskMessageBoundary.messageCount
-        ) {
-            taskMessageBoundary = ActiveTaskMessageBoundary(activeTaskKey, messages.size)
-        }
-    }
-    val alignmentState = remember(messages) { alignmentDisplayState(messages) }
     val effectiveTokenUsage = remember(session.tokenUsage, session.shoakuId, viewModel.tokenBudgetOverrides.toMap()) {
         val base = session.tokenUsage ?: return@remember null
         val overrideMax = session.shoakuId?.let(viewModel.tokenBudgetOverrides::get) ?: return@remember base
@@ -547,144 +632,6 @@ private fun SessionTaskPane(
             it.didChangeMaxTokens(DidChangeMaxTokens(shoakuId, requestedMax))
         }
     }
-    val finalCheckMessage = remember(messages, finalCheckState.startMessageCount.value) {
-        finalCheckState.startMessageCount.value?.let { startMessageCount ->
-            finalCheckResponse(messages.drop(startMessageCount))
-        }
-    }
-    val taskCheckState = remember(session.shoakuId, activeItemIndex, activeItem?.content) {
-        FinalCheckDisplayState()
-    }
-    val taskGuidanceState = remember(session.shoakuId, activeItemIndex, activeItem?.content) {
-        TaskGuidanceDisplayState()
-    }
-    val replyState = remember(session.shoakuId) { ReplyDisplayState() }
-    val replyMessage = remember(messages, replyState.startMessageCount.value) {
-        replyState.startMessageCount.value?.let { startMessageCount ->
-            finalCheckResponse(messages.drop(startMessageCount))
-        }
-    }
-    val taskCheckMessage = remember(messages, taskCheckState.startMessageCount.value) {
-        taskCheckState.startMessageCount.value?.let { startMessageCount ->
-            finalCheckResponse(messages.drop(startMessageCount))
-        }
-    }
-    val taskGuidanceMessage = remember(messages, taskGuidanceState.startMessageCount.value) {
-        taskGuidanceState.startMessageCount.value?.let { startMessageCount ->
-            finalCheckResponse(messages.drop(startMessageCount))
-        }
-    }
-    val finalCheckRequested = finalCheckState.requested.value
-    val finalCheckThinking = finalCheckState.thinking.value
-    val taskCheckRequested = taskCheckState.requested.value
-    val taskCheckThinking = taskCheckState.thinking.value
-    val taskGuidanceRequested = taskGuidanceState.requested.value
-    val taskGuidanceThinking = taskGuidanceState.thinking.value
-    val replyThinking = replyState.thinking.value
-    val replyDisplayMessage = when {
-        replyThinking -> Message(
-            type = "agentMessage",
-            phase = "final_answer",
-            text = ThinkingMessage
-        )
-        replyState.startMessageCount.value != null -> replyMessage
-        else -> null
-    }
-    val taskCheckDisplayMessage = when {
-        taskCheckThinking -> Message(
-            type = "agentMessage",
-            phase = "task_check",
-            text = ThinkingMessage
-        )
-        taskCheckRequested -> taskCheckMessage
-        else -> null
-    }
-    val taskGuidanceDisplayMessage = when {
-        taskGuidanceThinking -> Message(
-            type = "agentMessage",
-            phase = "task_guidance",
-            text = ThinkingMessage
-        )
-        taskGuidanceRequested -> taskGuidanceMessage
-        else -> null
-    }
-    val latestFinalPhaseMessage = remember(activeTaskMessages) {
-        latestTaskResponse(activeTaskMessages)
-    }
-    val isTaskCheckResponse = taskCheckDisplayMessage != null
-    val finalCheckDisplayMessage = when {
-        !isFinalCheckActive || !finalCheckRequested -> null
-        finalCheckThinking -> Message(
-            type = "agentMessage",
-            phase = "final_check",
-            text = ThinkingMessage
-        )
-        else -> finalCheckMessage
-    }
-    val interactionResponse = replyDisplayMessage
-        ?: taskGuidanceDisplayMessage
-        ?: finalCheckDisplayMessage
-        ?: taskCheckDisplayMessage
-        ?: latestFinalPhaseMessage?.takeIf { !it.text.isNullOrBlank() }
-    val isFinalCheckResponse = finalCheckDisplayMessage != null
-    val isFixedResponse = interactionResponse?.text?.let(::isFixedResponseText) == true
-
-    LaunchedEffect(messages.size, finalCheckMessage, taskCheckMessage, taskGuidanceMessage) {
-        if (finalCheckMessage != null) {
-            finalCheckState.thinking.value = false
-        }
-        if (taskCheckMessage != null) {
-            taskCheckState.thinking.value = false
-        }
-        if (taskGuidanceMessage != null) {
-            taskGuidanceState.thinking.value = false
-        }
-        replyState.startMessageCount.value?.let { startMessageCount ->
-            if (messages.drop(startMessageCount).any { it.type == "agentMessage" }) {
-                replyState.thinking.value = false
-            }
-        }
-    }
-    val comparableResponseText = remember(alignmentState) {
-        (alignmentState as? AlignmentDisplayState.NeedsInput)
-            ?.message
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-    }
-    var previousComparableResponseText by remember(session.shoakuId) { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(session.shoakuId, comparableResponseText) {
-        val nextResponseText = comparableResponseText ?: return@LaunchedEffect
-        val previousResponseText = previousComparableResponseText
-        previousComparableResponseText = nextResponseText
-        if (previousResponseText == null || previousResponseText == nextResponseText) {
-            return@LaunchedEffect
-        }
-    }
-
-    val latestTaskComparison = remember(messages) {
-        messages.asReversed().firstNotNullOfOrNull {
-            it.taskComparison?.takeIf { comparison -> comparison.isNotEmpty() }
-        }
-    }
-    val displayedTaskComparisonRows = remember(latestTaskComparison, todoItems) {
-        latestTaskComparison?.let { taskComparisonRows(it, todoItems) }
-    }
-    val comparisonRows = displayedTaskComparisonRows.orEmpty()
-    val activeComparisonRow = comparisonRows.firstOrNull {
-        it.humanTask?.content == activeItem?.content
-    }
-    val activeExplorerTask = activeComparisonRow?.explorerTasks?.firstOrNull()
-    val requestDiffReview: (Int) -> Unit = { explorerTaskIndex ->
-        val shoakuId = session.shoakuId
-        if (shoakuId != null) {
-            project?.sendNotificationToShoakuServer { server ->
-                server.createDiff(CreateDiffParams(shoakuId, explorerTaskIndex)).thenAccept { result ->
-                    openProjectDirectoryDiff(project, result.explorerTaskPath)
-                }
-            }
-        }
-    }
     Box(
         modifier = modifier
             .background(TodoColors.sectionSurface, RoundedCornerShape(8.dp))
@@ -695,7 +642,7 @@ private fun SessionTaskPane(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             SessionSectionHeader(
-                title = "Tasks",
+                title = "Plan",
                 trailing = {
                     TokenUsageIndicator(
                         tokenUsage = effectiveTokenUsage,
@@ -711,23 +658,14 @@ private fun SessionTaskPane(
                     )
                 }
             )
-            PlanComparisonPane(
-                comparisonRows = displayedTaskComparisonRows,
-                humanTasks = todoItems,
-                temporaryWorkspace = session.temporaryWorkspace,
-                activeHumanTaskContent = activeItem?.content,
-                runImplementationCommandEnabled = !session.sessionId.isNullOrBlank() && !session.appServerRemoteUrl.isNullOrBlank(),
-                onOpenCodeDiff = requestDiffReview,
-                onRunImplementationCommand = { task ->
-                    runImplementationForkCommand(project, session.sessionId, session.appServerRemoteUrl, task)
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            )
+            session.workflow?.let { workflow ->
+                val display = workflow.toWorkflowDisplayState()
+                StatusPill(label = display.label, tone = display.tone, pulse = statusPulse(), minWidth = Dp.Unspecified)
+                Text(workflow.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
+            }
             ConversationNavigationCard(
-                isThinking = interactionResponse?.text == ThinkingMessage,
-                hasResponse = interactionResponse != null,
+                isThinking = session.status?.navigator == "active",
+                hasResponse = session.messages.orEmpty().isNotEmpty(),
                 enabled = !session.shoakuId.isNullOrBlank() &&
                     !session.sessionId.isNullOrBlank() &&
                     !session.appServerRemoteUrl.isNullOrBlank(),
@@ -740,6 +678,12 @@ private fun SessionTaskPane(
                     )
                 }
             )
+            ImplementationDocumentsPane(
+                session = session,
+                project = project,
+                modifier = Modifier.weight(1f).fillMaxWidth()
+            )
+
         }
     }
 }
@@ -1443,62 +1387,59 @@ private fun UnifiedTaskLine(
 }
 
 @Composable
+private fun SessionActionRow(
+    title: String,
+    iconKey: IconKey,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val contentColor = if (enabled) TodoColors.primaryText else TodoColors.secondaryText.copy(alpha = 0.6f)
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(5.dp))
+            .background(if (hovered && enabled) TodoColors.currentTaskSurface else Color.Transparent)
+            .hoverable(interactionSource)
+            .clickable(enabled = enabled, role = Role.Button, interactionSource = interactionSource,
+                indication = null, onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(key = iconKey, contentDescription = null,
+            tint = if (enabled) TodoColors.secondaryText else contentColor,
+            modifier = Modifier.size(14.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = contentColor, fontSize = 12.sp,
+                fontWeight = FontWeight.Normal)
+            subtitle?.let { Text(it, color = TodoColors.secondaryText, fontSize = 10.sp) }
+        }
+    }
+}
+
+@Composable
 private fun ConversationNavigationCard(
     isThinking: Boolean,
     hasResponse: Boolean,
     enabled: Boolean,
     onClick: () -> Unit
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val hovered by interactionSource.collectIsHoveredAsState()
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(7.dp))
-            .background(if (hovered) TodoColors.currentTaskSurface else TodoColors.taskResponseSurface)
-            .border(1.dp, TodoColors.sectionDivider, RoundedCornerShape(7.dp))
-            .hoverable(interactionSource)
-            .clickable(
-                enabled = enabled,
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick
-            )
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            key = AllIconsKeys.General.Balloon,
-            contentDescription = null,
-            tint = TodoColors.linkText,
-            modifier = Modifier.size(16.dp)
-        )
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(1.dp)
-        ) {
-            Text("Open in Codex CLI", color = TodoColors.primaryText, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                text = when {
-                    !enabled -> "Waiting for the Codex session"
-                    isThinking -> "Shoaku is thinking…"
-                    hasResponse -> "Continue the conversation in Terminal"
-                    else -> "Start the conversation in Terminal"
-                },
-                color = TodoColors.secondaryText,
-                fontSize = 9.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+    SessionActionRow(
+        title = "Continue with Codex",
+        iconKey = AllIconsKeys.General.Balloon,
+        enabled = enabled,
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        subtitle = when {
+            !enabled -> "Waiting for the Codex session"
+            isThinking -> "Working · discuss or give instructions in Codex CLI"
+            hasResponse -> "Discuss the goal or give further instructions"
+            else -> "Discuss the goal and clarify requirements"
         }
-        Icon(
-            key = AllIconsKeys.Actions.Forward,
-            contentDescription = "Open in Codex CLI",
-            tint = TodoColors.linkText,
-            modifier = Modifier.size(16.dp)
-        )
-    }
+    )
 }
 
 private const val AlignmentGapMessageThreshold = 0.9
@@ -1509,12 +1450,6 @@ private const val UnderstandingGuidanceMode = "deepen_understanding"
 
 private fun isFixedResponseText(message: String) =
     message == ThinkingMessage || message == NoFinalCheckIssuesMessage
-
-private class FinalCheckDisplayState {
-    val requested = mutableStateOf(false)
-    val thinking = mutableStateOf(false)
-    val startMessageCount = mutableStateOf<Int?>(null)
-}
 
 private class ReplyDisplayState {
     val thinking = mutableStateOf(false)
@@ -4484,6 +4419,30 @@ private fun String?.toAgentStatusState(): AgentStatusState {
         else ->
             AgentStatusState("", AgentStatusTone.Hidden, false)
     }
+}
+
+private fun GoalWorkflowUi.toWorkflowDisplayState(): AgentStatusState {
+    val label = when (stage) {
+        "notStarted" -> "Not started"
+        "planning" -> "Planning"
+        "needsInput" -> "Needs input"
+        "needsApproval" -> "Needs approval"
+        "implementing" -> "Implementing"
+        "blocked" -> "Blocked"
+        "paused" -> "Paused"
+        "budgetLimited" -> "Budget reached"
+        "usageLimited" -> "Usage limit"
+        "complete" -> "Complete"
+        "reviewPending" -> "Review not ready"
+        "error" -> "Error"
+        else -> "Idle"
+    }
+    val running = stage == "planning" || stage == "implementing"
+    return AgentStatusState(label, when {
+        running -> AgentStatusTone.Running
+        stage == "error" || stage == "blocked" -> AgentStatusTone.Error
+        else -> AgentStatusTone.Disabled
+    }, running)
 }
 
 private fun AgentStatusUi.toSummaryStatusState(): AgentStatusState {

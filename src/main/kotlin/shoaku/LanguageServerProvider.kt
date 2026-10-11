@@ -78,7 +78,8 @@ data class Item(
     val messages: List<Message>? = emptyList(),
     val tokenUsage: TokenUsageUi? = null,
     val status: AgentStatusUi? = null,
-    val temporaryWorkspace: String? = null
+    val temporaryWorkspace: String? = null,
+    val workflow: GoalWorkflowUi? = null
 )
 
 data class TaskComparisonRowUi(
@@ -133,3 +134,5 @@ data class AgentStatusUi(
     val navigator: String? = null,
     val explorer: String? = null
 )
+
+data class GoalWorkflowUi(val stage: String = "idle", val detail: String = "")

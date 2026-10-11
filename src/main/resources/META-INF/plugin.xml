@@ -27,6 +27,8 @@
                     anchor="right"/>
         <platform.lsp.serverSupportProvider implementation="shoaku.LanguageServerProvider"/>
         <diff.DiffExtension implementation="shoaku.presentation.ReviewDiffExtension"/>
+        <fileEditorProvider implementation="shoaku.presentation.CommitReviewEditorProvider"/>
+        <diff.DiffExtension implementation="shoaku.presentation.CodeTraceDiffExtension"/>
     </extensions>
 
 </idea-plugin>
