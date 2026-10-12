@@ -3,10 +3,12 @@ package shoaku.presentation
 import com.intellij.ide.impl.ProjectUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.EDT
+import com.intellij.openapi.components.Service
+import com.intellij.openapi.components.service
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.TextEditorWithPreview
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.startup.StartupManager
+import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.wm.ToolWindowId
 import com.intellij.openapi.wm.ToolWindowManager
@@ -43,7 +45,7 @@ internal object WorktreeProjectOpener {
             val opened = ProjectUtil.findAndFocusExistingProjectForPath(path)
                 ?: ProjectUtil.openOrImport(path, null, true)
                 ?: return@withContext null
-            StartupManager.getInstance(opened).runAfterOpened {
+            opened.service<WorktreeReviewStartup>().runWhenReady {
                 ApplicationManager.getApplication().invokeLater {
                     if (!opened.isDisposed) {
                         ToolWindowManager.getInstance(opened).getToolWindow(ToolWindowId.VCS)?.show()
@@ -61,6 +63,32 @@ internal object WorktreeProjectOpener {
                 }
             }
             opened
+        }
+    }
+}
+
+/** Requests and startup completion are serialized on EDT, including already-open projects. */
+@Service(Service.Level.PROJECT)
+internal class WorktreeReviewStartup {
+    private var ready = false
+    private val pending = mutableListOf<() -> Unit>()
+
+    fun runWhenReady(action: () -> Unit) {
+        if (ready) action() else pending.add(action)
+    }
+
+    fun projectOpened() {
+        ready = true
+        val actions = pending.toList()
+        pending.clear()
+        actions.forEach { it() }
+    }
+}
+
+internal class WorktreeReviewStartupActivity : ProjectActivity {
+    override suspend fun execute(project: Project) {
+        withContext(Dispatchers.EDT) {
+            if (!project.isDisposed) project.service<WorktreeReviewStartup>().projectOpened()
         }
     }
 }

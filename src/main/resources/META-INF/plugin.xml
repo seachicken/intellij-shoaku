@@ -21,6 +21,7 @@
     <!-- Extensions defined by the plugin.
          Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
     <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="shoaku.presentation.WorktreeReviewStartupActivity"/>
         <projectService serviceImplementation="shoaku.ShoakuSettings" />
         <toolWindow id="Shoaku" factoryClass="shoaku.presentation.GoalsWindowFactory"
                     icon="icons/logo/logo.svg"
