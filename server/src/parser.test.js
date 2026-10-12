@@ -211,3 +211,10 @@ test('parse whole file', (t) => {
     ]
   );
 });
+
+test('does not accept session labels outside the six-character alphanumeric format', () => {
+  for (const id of ['shoaku-abcdef123456', 'shoaku-ab_123', 'shoaku-abcde', 'shoaku-abcdefg']) {
+    assert.deepStrictEqual(parser.parse(`- [${id}] Goal`), []);
+    assert.deepStrictEqual(parser.parse(`- Goal [${id}]`), []);
+  }
+});

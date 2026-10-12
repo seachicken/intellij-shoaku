@@ -2,6 +2,15 @@ package shoaku
 
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.editor.Document
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.util.Key
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.platform.lsp.api.LspServerManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
@@ -19,6 +28,7 @@ class LanguageServerProvider : LspServerSupportProvider {
         serverStarter: LspServerSupportProvider.LspServerStarter
     ) {
         serverStarter.ensureServerStarted(LanguageServerDescriptor(project))
+        installGoalIdListener(project, file)
     }
 }
 
@@ -53,6 +63,30 @@ private class LanguageServerDescriptor(project: Project) : AppLanguageServerDesc
     }
 
     override fun createLsp4jClient(handler: LspServerNotificationsHandler) = object : Lsp4jClient(handler) {
+        @JsonNotification("shoaku/assignedGoalIds")
+        fun assignedGoalIds(params: AssignGoalIdsResult) {
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                val file = LocalFileSystem.getInstance().findFileByPath(params.filePath) ?: return@invokeLater
+                val document = FileDocumentManager.getInstance().getDocument(file) ?: return@invokeLater
+                document.putUserData(GoalIdPendingKey, false)
+                if (document.text == params.originalText && params.changed) {
+                    WriteCommandAction.runWriteCommandAction(project, "Assign Shoaku ID", null, Runnable {
+                        var prefix = 0
+                        while (prefix < params.originalText.length && prefix < params.text.length && params.originalText[prefix] == params.text[prefix]) prefix++
+                        var suffix = 0
+                        while (suffix < params.originalText.length - prefix && suffix < params.text.length - prefix &&
+                            params.originalText[params.originalText.lastIndex - suffix] == params.text[params.text.lastIndex - suffix]) suffix++
+                        document.replaceString(prefix, params.originalText.length - suffix, params.text.substring(prefix, params.text.length - suffix))
+                    })
+                    FileDocumentManager.getInstance().saveDocument(document)
+                }
+                if (document.text != params.originalText && document.text != params.text) {
+                    requestGoalIds(project, file, document)
+                }
+            }
+        }
+
         @JsonNotification("shoaku/syncGoals")
         fun syncGoals(params: SyncGoalsParams) {
             project.service<ShoakuSettings>().viewModel.apply {
@@ -68,6 +102,8 @@ data class SyncGoalsParams(
 )
 
 data class Item(
+    val line: Int = 0,
+    val mode: String? = null,
     val type: String,
     val content: String,
     val checked: Boolean? = null,
@@ -136,3 +172,27 @@ data class AgentStatusUi(
 )
 
 data class GoalWorkflowUi(val stage: String = "idle", val detail: String = "")
+
+private val GoalIdListenerKey = Key.create<Boolean>("shoaku.goalId.listener")
+private val GoalIdPendingKey = Key.create<Boolean>("shoaku.goalId.pending")
+
+private fun requestGoalIds(project: Project, file: VirtualFile, document: Document) {
+    if (project.isDisposed || file.path != project.service<ShoakuSettings>().state.filePath ||
+        document.getUserData(GoalIdPendingKey) == true || !document.text.contains("[shoaku]")) return
+    val server = LspServerManager.getInstance(project)
+        .getServersForProvider(LanguageServerProvider::class.java).firstOrNull() ?: return
+    document.putUserData(GoalIdPendingKey, true)
+    server.sendNotification { (it as AppLanguageServer).assignGoalIds(AssignGoalIdsParams(document.text, file.path)) }
+}
+
+private fun installGoalIdListener(project: Project, file: VirtualFile) {
+    val document = FileDocumentManager.getInstance().getDocument(file) ?: return
+    if (document.getUserData(GoalIdListenerKey) == true) return
+    document.putUserData(GoalIdListenerKey, true)
+    document.addDocumentListener(object : DocumentListener {
+        override fun documentChanged(event: DocumentEvent) {
+            ApplicationManager.getApplication().invokeLater { requestGoalIds(project, file, document) }
+        }
+    }, project)
+    ApplicationManager.getApplication().invokeLater { requestGoalIds(project, file, document) }
+}

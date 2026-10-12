@@ -206,3 +206,15 @@ function countChangeLines(diff) {
   return result;
 }
 
+
+test('preserves both requirement changes and Explorer progress in the same debounce window', async () => {
+  const inputs = [];
+  const builder = new AgentInputBuilder('/repo', 1, 20, { diffFun: async (_, value) => JSON.stringify(value) });
+  const received = new Promise(resolve => builder.onAgentInput(input => { inputs.push(input); resolve(); }));
+  builder.ingest({ type: inputType.GOAL_HUMAN, content: { requirement: 'Keep compatibility' } });
+  builder.ingest({ type: inputType.GOAL_EXPLORER, content: { completed: 'Investigation' } });
+  await received;
+  assert.equal(inputs.length, 1);
+  assert.match(inputs[0], /Keep compatibility/);
+  assert.match(inputs[0], /Investigation/);
+});

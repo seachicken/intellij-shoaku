@@ -45,7 +45,7 @@ internal fun readReviewGuide(workspace: Path, details: ReviewCommitDetails, read
             }
             GuideStep(step.text("id"), step.text("title"), step.text("why"), step.text("change"), step.text("verification"), anchors, links)
         }
-        require(steps.size in 1..24 && steps.map { it.id }.distinct().size == steps.size && steps.all { it.id.matches(Regex("[a-zA-Z0-9_-]{1,80}")) }) { "Design steps need unique IDs." }
+        require(steps.size in (if (details.files.isEmpty()) 0 else 1)..24 && steps.map { it.id }.distinct().size == steps.size && steps.all { it.id.matches(Regex("[a-zA-Z0-9_-]{1,80}")) }) { "Design steps need unique IDs." }
         val markdownPath = workspace.resolve(".shoaku/commits/${details.commit.hash}.md")
         val markdown = Files.readString(markdownPath)
         require(steps.all { markdown.contains(it.title) }) { "Design step titles do not match the full design document." }

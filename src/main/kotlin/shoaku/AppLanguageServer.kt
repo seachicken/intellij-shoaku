@@ -6,6 +6,8 @@ import org.eclipse.lsp4j.services.LanguageServer
 import java.util.concurrent.CompletableFuture
 
 interface AppLanguageServer : LanguageServer {
+    @JsonNotification("shoaku/assignGoalIds")
+    fun assignGoalIds(params: AssignGoalIdsParams)
     @JsonNotification("shoaku/startSession")
     fun startSession(params: StartSessionParams)
     @JsonNotification("shoaku/didChangeGoalsFilePath")
@@ -25,7 +27,8 @@ data class DidChangeGoalsFilePath(
 )
 
 data class StartSessionParams(
-    val shoakuId: String?
+    val shoakuId: String?,
+    val line: Int? = null
 )
 
 data class ReplyParams(
@@ -60,3 +63,6 @@ data class DidChangeMaxTokens(
     val shoakuId: String,
     val tokens: Int
 )
+
+data class AssignGoalIdsParams(val text: String, val filePath: String)
+data class AssignGoalIdsResult(val text: String, val changed: Boolean, val originalText: String, val filePath: String)

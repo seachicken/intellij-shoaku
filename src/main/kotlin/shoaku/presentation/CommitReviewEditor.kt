@@ -53,15 +53,15 @@ import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.Timer
 
-internal class CommitReviewVirtualFile(val workspace: Path) : LightVirtualFile(
-    "Outcome · ${workspace.fileName}", PlainTextFileType.INSTANCE, ""
+internal class CommitReviewVirtualFile(val workspace: Path, val isPrReview: Boolean = false) : LightVirtualFile(
+    "${if (isPrReview) "PR review" else "Outcome"} · ${workspace.fileName}", PlainTextFileType.INSTANCE, ""
 )
 
-internal fun openCommitReview(project: Project, workspace: String) {
+internal fun openCommitReview(project: Project, workspace: String, isPrReview: Boolean = false) {
     val path = Path.of(workspace).toAbsolutePath().normalize()
     val manager = FileEditorManager.getInstance(project)
     val existing = manager.openFiles.filterIsInstance<CommitReviewVirtualFile>().firstOrNull { it.workspace == path }
-    manager.openFile(existing ?: CommitReviewVirtualFile(path), true)
+    manager.openFile(existing ?: CommitReviewVirtualFile(path, isPrReview), true)
 }
 
 class CommitReviewEditorProvider : FileEditorProvider, DumbAware {
@@ -131,7 +131,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
         changes.add(split, BorderLayout.CENTER)
         root.add(JTabbedPane().apply {
             name = "shoaku.outcome.sections"
-            addTab("Overview", overview)
+            addTab("Design overview", overview)
             addTab("Changes", changes)
         }, BorderLayout.CENTER)
         layoutPicker.addActionListener { updateLayout() }
@@ -427,7 +427,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
                             alignmentX = 0f
                         })
                     }
-                    paragraph("Verification — reported by the author", step.verification)
+                    paragraph(if (reviewFile.isPrReview) "Verification — check evidence and provenance" else "Verification — reported by the author", step.verification)
                 }
             }
             body.add(JBLabel("Selecting mapped code updates this explanation.").apply { alignmentX = 0f })
@@ -507,7 +507,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
 
     override fun getComponent(): JComponent = root
     override fun getPreferredFocusedComponent(): JComponent = commitPicker
-    override fun getName() = "Outcome"
+    override fun getName() = if (reviewFile.isPrReview) "PR review" else "Outcome"
     override fun getFile(): VirtualFile = reviewFile
     override fun setState(state: FileEditorState) {}
     override fun isModified() = false

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import childProcess from 'node:child_process';
-import { recordReviewBase, inspectCommitReview } from './commit-review.js';
+import { recordReviewBase, inspectCommitReview, inspectExistingCommitReview } from './commit-review.js';
 
 const execFile = promisify(childProcess.execFile);
 test('reviews actual commits and rejects uncommitted work, missing explanations and stale report links', async () => {
@@ -43,4 +43,13 @@ test('reviews actual commits and rejects uncommitted work, missing explanations 
     assert.notEqual(rewritten.commits[0].hash, hash);
     assert.deepEqual(rewritten.missingDocs, [rewritten.commits[0].hash]);
   } finally { await rm(workspace, { recursive: true, force: true }); }
+});
+
+test('reports a removed session workspace without recreating it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'shoaku-missing-workspace-'));
+  const missing = join(root, 'removed-session');
+  try {
+    await assert.rejects(inspectExistingCommitReview(missing), /Session workspace no longer exists/);
+    await assert.rejects(readFile(join(missing, '.shoaku/base-revision')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

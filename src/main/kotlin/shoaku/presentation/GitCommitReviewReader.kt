@@ -1,5 +1,6 @@
 package shoaku.presentation
 
+import com.google.gson.JsonParser
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
@@ -38,7 +39,16 @@ internal class GitCommitReviewReader(private val workspace: Path) {
         require(Regex("[a-f0-9]{40,64}").matches(hash)) { "Invalid commit revision." }
     }
 
+    private fun prSnapshot() = workspace.resolve(".shoaku/pr-review.json").let { path ->
+        if (Files.isRegularFile(path)) JsonParser.parseString(Files.readString(path)).asJsonObject else null
+    }
+
     fun commits(): List<ReviewCommit> {
+        prSnapshot()?.let { pr ->
+            val head = pr.get("head").asString
+            validateHash(head)
+            return listOf(ReviewCommit(head, pr.get("title").asString))
+        }
         val base = Files.readString(workspace.resolve(".shoaku/base-revision")).trim()
         validateHash(base)
         git("merge-base", "--is-ancestor", base, "HEAD")
@@ -50,7 +60,10 @@ internal class GitCommitReviewReader(private val workspace: Path) {
 
     fun details(commit: ReviewCommit): ReviewCommitDetails {
         validateHash(commit.hash)
-        val parent = git("rev-list", "--parents", "-n", "1", commit.hash, "--").trim().split(' ').getOrNull(1)
+        val parent = prSnapshot()?.let { pr ->
+            require(pr.get("head").asString == commit.hash) { "PR snapshot changed." }
+            pr.get("base").asString.also(::validateHash)
+        } ?: git("rev-list", "--parents", "-n", "1", commit.hash, "--").trim().split(' ').getOrNull(1)
         val changed = if (parent == null) {
             git("diff-tree", "--root", "--no-commit-id", "--name-status", "--no-renames", "-r", "-z", commit.hash, "--")
         } else {

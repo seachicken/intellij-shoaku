@@ -58,13 +58,13 @@ export default class AgentInputBuilder {
     clearTimeout(this.timer);
     this.timer = setTimeout(async () => {
       let lastOperation = new Map();
-      for (const event of this.events) {
+      for (const event of this.events.splice(0)) {
         switch (event.type) {
           case inputType.LSP:
             if (event.content.method === 'textDocument/didChange') {
               // ex. file:///project/root/Main.java -> Main.java
               const relativePath = event.content.params.textDocument.uri.slice(this.rootPath.length + 8);
-              const line = event.content.params.contentChanges[0].range.start.line;
+              const line = event.content.params.contentChanges[0].range?.start.line ?? 0;
               lastOperation.set(event.type, `- Changed ${relativePath} around line ${line}`);
             }
             break;
@@ -75,38 +75,18 @@ export default class AgentInputBuilder {
         }
       }
 
-      switch (event.type) {
-        case inputType.LSP:
-          if (lastOperation.has(event.type)) {
-            for (const listener of this.listeners) {
-              listener([
-                'Driver operations:',
-                lastOperation.get(event.type),
-              ].join('\n'));
-            }
-            this.prevOperation.set(event.type, structuredClone(lastOperation.get(event.type)));
-            lastOperation = new Map();
-          }
-          break;
-        case inputType.GOAL_HUMAN:
-        case inputType.GOAL_EXPLORER:
-          if (lastOperation.has(event.type)) {
-            const diffResult = await this.diffFun(this.prevOperation.get(event.type), lastOperation.get(event.type));
-            if (diffResult.trim().length === 0) {
-              break;
-            }
-
-            for (const listener of this.listeners) {
-              listener([
-                `${event.type === inputType.GOAL_HUMAN ? 'Human' : 'Explorer'} goal change diff:`,
-                diffResult
-              ].join('\n'));
-            }
-            this.prevOperation.set(event.type, structuredClone(lastOperation.get(event.type)));
-            lastOperation = new Map();
-          }
-          break;
+      const chunks = [];
+      for (const [type, content] of lastOperation) {
+        if (type === inputType.LSP) {
+          chunks.push(`Driver operations:\n${content}`);
+        } else {
+          const diffResult = await this.diffFun(this.prevOperation.get(type), content);
+          if (diffResult.trim()) chunks.push(`${type === inputType.GOAL_HUMAN ? 'Human' : 'Explorer'} goal change diff:\n${diffResult}`);
+        }
+        this.prevOperation.set(type, structuredClone(content));
       }
+      if (chunks.length) for (const listener of this.listeners) listener(chunks.join('\n\n'));
+
     }, this.debounceMs);
   }
 }

@@ -1,6 +1,6 @@
 import childProcess from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { inspectReviewMap } from './review-map.js';
 
@@ -8,6 +8,17 @@ const execFile = promisify(childProcess.execFile);
 const git = async (workspace, ...args) => (await execFile('git', ['-C', workspace, ...args], { maxBuffer: 4 * 1024 * 1024, timeout: 30000 })).stdout;
 
 export async function recordReviewBase(workspace, { existing = false } = {}) {
+  if (existing) {
+    const directory = await stat(workspace).catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (!directory?.isDirectory()) {
+      const error = new Error(`Session workspace no longer exists: ${workspace}. Restore it before resuming this goal.`);
+      error.code = 'SHOAKU_WORKSPACE_MISSING';
+      throw error;
+    }
+  }
   const file = join(workspace, '.shoaku', 'base-revision');
   try { return (await readFile(file, 'utf8')).trim(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   // Older sessions already have a dedicated branch. Its oldest reflog entry
@@ -19,6 +30,11 @@ export async function recordReviewBase(workspace, { existing = false } = {}) {
   await mkdir(join(workspace, '.shoaku'), { recursive: true });
   await writeFile(file, revision + '\n', { flag: 'wx' });
   return revision;
+}
+
+export async function inspectExistingCommitReview(workspace) {
+  await recordReviewBase(workspace, { existing: true });
+  return inspectCommitReview(workspace);
 }
 
 export async function inspectCommitReview(workspace) {

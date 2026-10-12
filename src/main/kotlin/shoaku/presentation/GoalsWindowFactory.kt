@@ -135,16 +135,21 @@ private fun MyToolWindowContent(
     val vm = remember { viewModel }
     val openSessionKeys = remember { mutableStateListOf<SessionKey>().also { it.addAll(initialOpenSessionKeys) } }
     var selectedSessionKey by remember { mutableStateOf(initialSelectedSessionKey) }
-    val goals = vm.items.filter { it.shoakuId != null }
+    var pendingGoal by remember { mutableStateOf<Item?>(null) }
+    val goals = vm.items
     val goalFilter = vm.goalFilter
-    val openSessions = openSessionKeys.mapNotNull { key -> goals.firstOrNull { it.sessionKey == key } }
-    val selectedSession = selectedSessionKey?.let { key -> goals.firstOrNull { it.sessionKey == key } }
+    val openSessions = openSessionKeys.mapNotNull { key -> goals.firstOrNull { it.shoakuId == key.shoakuId } }
+    val pendingSession = pendingGoal?.let { selected ->
+        goals.firstOrNull { it.line == selected.line && it.content == selected.content }
+    }
+    val selectedSession = selectedSessionKey?.let { key -> goals.firstOrNull { it.shoakuId == key.shoakuId } } ?: pendingSession
 
     fun persistOpenSessions() {
         state.openSessionIds = openSessionKeys.map(SessionKey::shoakuId).toMutableList()
     }
 
     fun selectSession(key: SessionKey?) {
+        pendingGoal = null
         selectedSessionKey = key
         state.selectedSessionId = key?.shoakuId
     }
@@ -163,11 +168,24 @@ private fun MyToolWindowContent(
         }
     }
 
+    LaunchedEffect(pendingSession) {
+        if (pendingSession?.shoakuId != null) {
+            val key = pendingSession.sessionKey
+            if (key !in openSessionKeys) {
+                openSessionKeys.add(key)
+                persistOpenSessions()
+            }
+            selectSession(key)
+        } else if (pendingGoal != null && pendingSession == null && vm.hasReceivedGoals) {
+            pendingGoal = null
+        }
+    }
+
     LaunchedEffect(goals, vm.hasReceivedGoals) {
         if (!vm.hasReceivedGoals) {
             return@LaunchedEffect
         }
-        val currentKeys = goals.map { it.sessionKey }.toSet()
+        val currentKeys = goals.filter { it.shoakuId != null }.map { it.sessionKey }.toSet()
         if (openSessionKeys.removeAll { it !in currentKeys }) {
             persistOpenSessions()
         }
@@ -209,6 +227,12 @@ private fun MyToolWindowContent(
                 },
                 onOpenSession = { session ->
                     if (session.shoakuId == null) {
+                        selectedSessionKey = null
+                        state.selectedSessionId = null
+                        pendingGoal = session
+                        project?.sendNotificationToShoakuServer {
+                            it.startSession(StartSessionParams(null, session.line))
+                        }
                         return@SessionListContent
                     }
                     project?.let {
@@ -419,17 +443,6 @@ private fun SessionListContent(
         }
 
         val listState = rememberLazyListState()
-        val activeSessionIndex = filteredGoals.indexOfFirst { it.checked == false }
-
-        LaunchedEffect(filteredGoals) {
-            if (filteredGoals.isEmpty()) {
-                return@LaunchedEffect
-            }
-
-            val targetIndex = if (activeSessionIndex >= 0) activeSessionIndex else filteredGoals.lastIndex
-            listState.animateScrollToItem(targetIndex)
-        }
-
         ScrollHintLazyColumn(
             state = listState,
             modifier = Modifier
@@ -442,19 +455,18 @@ private fun SessionListContent(
                 ),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            itemsIndexed(filteredGoals) { index, session ->
+            items(filteredGoals) { session ->
                 val state = when {
                     session.checked == true -> TaskItemState.Completed
-                    index == activeSessionIndex -> TaskItemState.Current
                     else -> TaskItemState.Pending
                 }
                 TodoRow(
                     title = session.content,
-                    subtitle = session.workflow?.detail ?: if (session.checked == true) "Outcome ready" else "Plan not started",
+                    subtitle = if (session.mode == "review") "PR review" else session.workflow?.detail ?: if (session.checked == true) "Outcome ready" else "Open goal",
                     meta = null,
                     state = state,
                     hoverable = true,
-                    onClick = if (session.shoakuId != null) ({ onOpenSession(session) }) else null,
+                    onClick = { onOpenSession(session) },
                     trailing = {
                         val status = session.workflow?.toWorkflowDisplayState()
                         if (status != null) {
@@ -479,6 +491,25 @@ private fun SessionDetailContent(
     project: Project? = null,
     modifier: Modifier = Modifier
 ) {
+    if (session.sessionId == null) {
+        Column(modifier.padding(TodoMetrics.horizontalPadding), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SessionSectionHeader(title = session.content)
+            Text(if (session.workflow?.stage == "notStarted") "Waiting…" else "Preparing…",
+                color = TodoColors.secondaryText, fontSize = 12.sp)
+            session.children.forEach { note ->
+                Text(note.content, color = TodoColors.secondaryText, fontSize = 12.sp)
+            }
+            session.workflow?.takeIf { it.stage == "error" }?.let {
+                Text(it.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
+            }
+            if (session.workflow?.stage == "error") {
+                DefaultButton(onClick = { project?.sendNotificationToShoakuServer {
+                    it.startSession(StartSessionParams(session.shoakuId, session.line))
+                } }, enabled = project != null) { Text("Try again") }
+            }
+        }
+        return
+    }
     SessionTaskPane(
         session = session,
         viewModel = viewModel,
@@ -494,6 +525,17 @@ private data class ImplementationArtifacts(val tasks: List<ImplementationTask>, 
 @OptIn(ExperimentalFoundationApi::class)
 private fun ImplementationDocumentsPane(session: Item, project: Project?, modifier: Modifier = Modifier) {
     val workspace = session.temporaryWorkspace
+    if (session.mode == "review") {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SessionSectionHeader(title = "Review")
+            DefaultButton(
+                onClick = { if (project != null && workspace != null) openCommitReview(project, workspace, true) },
+                enabled = project != null && !workspace.isNullOrBlank(),
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Open design and code") }
+        }
+        return
+    }
     val scope = rememberCoroutineScope()
     var openingWorktree by remember(workspace) { mutableStateOf(false) }
     var worktreeOpenError by remember(workspace) { mutableStateOf<String?>(null) }
@@ -543,8 +585,8 @@ private fun ImplementationDocumentsPane(session: Item, project: Project?, modifi
     val currentIndex = tasks.indexOfFirst { !it.completed }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(when {
-            !artifacts.hasPlan -> "The plan will appear here when ready."
-            tasks.isEmpty() -> "No steps listed in the plan yet."
+            !artifacts.hasPlan -> "Preparing plan…"
+            tasks.isEmpty() -> "No steps yet."
             else -> "${tasks.count { it.completed }} of ${tasks.size} steps complete"
         }, color = TodoColors.secondaryText, fontSize = 12.sp)
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -579,12 +621,12 @@ private fun ImplementationDocumentsPane(session: Item, project: Project?, modifi
                 }
             }
         }
-        SessionSectionHeader(title = "Implementation")
+        SessionSectionHeader(title = "Review")
         DefaultButton(
             onClick = { if (project != null && workspace != null) openCommitReview(project, workspace) },
             enabled = project != null && !workspace.isNullOrBlank(),
             modifier = Modifier.fillMaxWidth()
-        ) { Text("Review outcome") }
+        ) { Text("Open design and code") }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(Modifier.weight(1f)) {
                 Tooltip(tooltip = { Text("Open the implementation in a separate IDE window") }) {
@@ -661,11 +703,13 @@ private fun SessionTaskPane(
             session.workflow?.let { workflow ->
                 val display = workflow.toWorkflowDisplayState()
                 StatusPill(label = display.label, tone = display.tone, pulse = statusPulse(), minWidth = Dp.Unspecified)
-                Text(workflow.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
+                if (workflow.stage in setOf("error", "needsInput", "needsApproval", "blocked", "reviewPending", "budgetLimited", "usageLimited")) {
+                    Text(workflow.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
+                }
             }
+            ImplementationDocumentsPane(session, project, Modifier.weight(1f).fillMaxWidth())
+            SessionSectionHeader(title = "Discuss the change")
             ConversationNavigationCard(
-                isThinking = session.status?.navigator == "active",
-                hasResponse = session.messages.orEmpty().isNotEmpty(),
                 enabled = !session.shoakuId.isNullOrBlank() &&
                     !session.sessionId.isNullOrBlank() &&
                     !session.appServerRemoteUrl.isNullOrBlank(),
@@ -677,11 +721,6 @@ private fun SessionTaskPane(
                         session.appServerRemoteUrl
                     )
                 }
-            )
-            ImplementationDocumentsPane(
-                session = session,
-                project = project,
-                modifier = Modifier.weight(1f).fillMaxWidth()
             )
 
         }
@@ -1422,8 +1461,6 @@ private fun SessionActionRow(
 
 @Composable
 private fun ConversationNavigationCard(
-    isThinking: Boolean,
-    hasResponse: Boolean,
     enabled: Boolean,
     onClick: () -> Unit
 ) {
@@ -1432,13 +1469,7 @@ private fun ConversationNavigationCard(
         iconKey = AllIconsKeys.General.Balloon,
         enabled = enabled,
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        subtitle = when {
-            !enabled -> "Waiting for the Codex session"
-            isThinking -> "Working · discuss or give instructions in Codex CLI"
-            hasResponse -> "Discuss the goal or give further instructions"
-            else -> "Discuss the goal and clarify requirements"
-        }
+        modifier = Modifier.fillMaxWidth()
     )
 }
 

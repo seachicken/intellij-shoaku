@@ -49,7 +49,7 @@ function parse(text, { wholeFile = false } = {}) {
         continue;
       }
     } else {
-      const match = line.match(/^(\s*)(?:- |\* |)(\[[ |x]\]|) *(?:\[(shoaku(?:-[A-Za-z0-9]+)?)\])? *(.+?) *(?:\[(shoaku(?:-[A-Za-z0-9]+)?)\])?$/d);
+      const match = line.match(/^(\s*)(?:- |\* |)(\[[ |x]\]|) *(?:\[(shoaku(?:-[A-Za-z0-9]{6})?)\])? *(.+?) *(?:\[(shoaku(?:-[A-Za-z0-9]{6})?)\])?$/d);
       if (match) {
         indent = match[1].length;
         checked = match[2];
