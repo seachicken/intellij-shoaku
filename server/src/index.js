@@ -23,6 +23,7 @@ import { inferGoalMode, preparePrReview, savePrDesign } from './pr-review.js';
 import { assignGoalIds } from './goal-ids.js';
 import { activeGoalId, canAdvanceGoal, nextQueueGoal } from './goal-queue.js';
 import { ConversationUpdates } from './conversation-updates.js';
+import { GoalsFileWatcher } from './goals-file-watcher.js';
 
 const exec = promisify(child_process.exec);
 const appServerSocketPath = join(tmpdir(), `shoaku-app-server-${process.pid}.sock`);
@@ -450,7 +451,9 @@ async function startNextGoal() {
         if (navigator.result.thread.status?.type === 'active') return false;
         return (await inspectExistingCommitReview(thread.result.thread.cwd)).ready;
       } catch (error) {
-        if (error.code === 'SHOAKU_WORKSPACE_MISSING') unavailableGoals.add(id);
+        // Keep the failed session visible, but do not repeatedly inspect it or
+        // let it hold up unrelated goals. An explicit open retries restoration.
+        unavailableGoals.add(id);
         const goal = findItemByShoakuId(lists, id);
         if (goal) startupWorkflowByGoal.set(startupGoalKey(goal), { stage: 'error', detail: error.message });
         logWarn(`Cannot inspect saved session ${id}: ${error.message}`);
@@ -465,12 +468,20 @@ async function startNextGoal() {
   runningGoalId = goal.shoakuId;
   if (action === 'wait' || startingGoals.has(goal.shoakuId) ||
       startupWorkflowByGoal.get(startupGoalKey(goal))?.stage === 'error') return;
+  restoreGoal(goal);
+}
+
+function restoreGoal(goal) {
   startingGoals.add(goal.shoakuId);
   // Do not await here: resuming emits sync notifications through this queue.
-  resumeSession(goal.shoakuId).catch(error => {
-    if (error.code === 'SHOAKU_WORKSPACE_MISSING') unavailableGoals.add(goal.shoakuId);
+  resumeSession(goal.shoakuId).then(() => {
+    unavailableGoals.delete(goal.shoakuId);
+    startupWorkflowByGoal.delete(startupGoalKey(goal));
+  }).catch(error => {
+    unavailableGoals.add(goal.shoakuId);
+    if (runningGoalId === goal.shoakuId) runningGoalId = undefined;
     startupWorkflowByGoal.set(startupGoalKey(goal), { stage: 'error', detail: error.message });
-    logError(`Cannot restore unfinished session ${goal.shoakuId}: ${error.message}`);
+    logWarn(`Cannot restore unfinished session ${goal.shoakuId}: ${error.message}. Skipped automatic restoration; open the session to retry.`);
   }).finally(() => {
     startingGoals.delete(goal.shoakuId);
     syncShoakuLists(initializeParams.initializationOptions.filePath)
@@ -764,9 +775,6 @@ async function resumeSession(shoakuId) {
   const explorerThread = await sendAppRequest('thread/read', { threadId: metaData.explorer.threadId, includeTurns: false });
   const explorerWorkspace = explorerThread.result.thread.cwd;
   await recordReviewBase(explorerWorkspace, { existing: true });
-  unavailableGoals.delete(shoakuId);
-  const restoredItem = findItemByShoakuId(lists, shoakuId);
-  if (restoredItem) startupWorkflowByGoal.delete(startupGoalKey(restoredItem));
 
   const [navigatorRes, explorerRes] = await Promise.all([
     sendAppRequest('thread/resume', {
@@ -917,6 +925,7 @@ function syncShoakuLists(filePath) {
   return result;
 }
 async function syncShoakuListsNow(filePath) {
+  if (filePath !== initializeParams.initializationOptions.filePath) return;
   try {
     let content = await readFile(filePath, { encoding: 'utf8' });
     const assigned = await assignGoalIds(content, () => reserveSessionId(sessionsDir));
@@ -924,6 +933,7 @@ async function syncShoakuListsNow(filePath) {
       await writeFile(filePath, assigned.text, 'utf8');
       content = assigned.text;
     }
+    if (filePath !== initializeParams.initializationOptions.filePath) return;
     lists = parser.parse(content);
   } catch (e) {
     if (e.code === 'EPERM') {
@@ -931,6 +941,7 @@ async function syncShoakuListsNow(filePath) {
     } else if (e.code !== 'ENOENT') {
       throw e;
     }
+    if (filePath !== initializeParams.initializationOptions.filePath) return;
     lists = [];
   }
 
@@ -961,6 +972,7 @@ async function syncShoakuListsNow(filePath) {
       goal.temporaryWorkspace = chatByShoakuId.get(goal.shoakuId)?.temporaryWorkspace;
     }
   }
+  if (filePath !== initializeParams.initializationOptions.filePath) return;
   process.stdout.write(
     buildNotification('shoaku/syncGoals', {
       lists
@@ -1094,8 +1106,8 @@ process.stdin.on('data', async (chunk) => {
 
         case 'shoaku/didChangeGoalsFilePath':
           initializeParams.initializationOptions.filePath = message.params.filePath;
-          await syncShoakuLists(initializeParams.initializationOptions.filePath);
           watchGoalsFileUpdates();
+          await syncShoakuLists(initializeParams.initializationOptions.filePath);
           break;
 
         case 'shoaku/assignGoalIds': {
@@ -1110,7 +1122,7 @@ process.stdin.on('data', async (chunk) => {
             ? item.shoakuId === message.params.shoakuId : item.line === message.params.line);
           if (!goal?.shoakuId || startingGoals.has(goal.shoakuId)) break;
           if (await stat(join(sessionsDir, goal.shoakuId, 'meta.json')).catch(() => null)) {
-            resumeSession(goal.shoakuId).catch(e => logWarn(`Failed to resume ${goal.shoakuId}: ${e}`));
+            restoreGoal(goal);
             break;
           }
           startupWorkflowByGoal.delete(startupGoalKey(goal));
@@ -1198,31 +1210,21 @@ async function createDiff(taskIndex, tempWorkspace) {
   return outputDir;
 }
 
-let prevValidGoalsFilePath = null;
+const goalsFileWatcher = new GoalsFileWatcher();
 async function watchGoalsFileUpdates() {
-  try {
-    const filePath = initializeParams.initializationOptions.filePath;
-    for await (const event of watch(filePath)) {
-      if (prevValidGoalsFilePath != null && initializeParams.initializationOptions.filePath !== prevValidGoalsFilePath) {
-        prevValidGoalsFilePath = null;
-        return;
-      }
-      prevValidGoalsFilePath = filePath;
-
+  await goalsFileWatcher.watch(initializeParams.initializationOptions.filePath, async filePath => {
       await syncShoakuLists(filePath);
+      if (filePath !== initializeParams.initializationOptions.filePath) return;
       for (const goal of lists) {
         if (!shoakuToSession.has(goal.shoakuId)) continue;
         goalInputBuilderFor(goal.shoakuId).ingest({ type: inputType.GOAL_HUMAN,
           content: { goal: goal.content, children: goal.children } });
       }
-
-
-    }
-  } catch (err) {
+  }, err => {
     if (err.code !== 'ENOENT') {
       logError(`Error watching human goals file: ${err}`);
     }
-  }
+  });
 }
 
 async function watchExplorerGoalsFileUpdates(filePath) {

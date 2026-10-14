@@ -496,9 +496,6 @@ private fun SessionDetailContent(
             SessionSectionHeader(title = session.content)
             Text(if (session.workflow?.stage == "notStarted") "Waiting…" else "Preparing…",
                 color = TodoColors.secondaryText, fontSize = 12.sp)
-            session.children.forEach { note ->
-                Text(note.content, color = TodoColors.secondaryText, fontSize = 12.sp)
-            }
             session.workflow?.takeIf { it.stage == "error" }?.let {
                 Text(it.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
             }

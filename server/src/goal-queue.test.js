@@ -79,3 +79,30 @@ test('an unresolved persisted session still blocks advancement', async () => {
     finished: async () => false
   }), { goal: paused, action: 'resume' });
 });
+
+test('failed restoration is skipped across queue updates until an explicit retry succeeds', async () => {
+  const old = { shoakuId: 'shoaku-aA1234' };
+  const next = { shoakuId: 'shoaku-bB5678', checked: false };
+  const unavailable = new Set();
+  let inspections = 0;
+  const hooks = {
+    // Restoration may have attached a partial chat before failing.
+    attached: id => id === old.shoakuId,
+    failed: () => false,
+    persisted: async id => id === old.shoakuId,
+    unavailable: id => unavailable.has(id),
+    finished: async id => {
+      inspections++;
+      unavailable.add(id);
+      return false;
+    }
+  };
+  assert.deepEqual(await nextQueueGoal([old, next], hooks), { goal: next, action: 'start' });
+  assert.deepEqual(await nextQueueGoal([old, next], hooks), { goal: next, action: 'start' });
+  assert.equal(inspections, 1);
+
+  // Successful explicit restoration re-enables normal unfinished-work priority.
+  unavailable.delete(old.shoakuId);
+  hooks.finished = async () => false;
+  assert.deepEqual(await nextQueueGoal([old, next], hooks), { goal: old, action: 'wait' });
+});
