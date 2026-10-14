@@ -11,7 +11,6 @@ import WebSocket from 'ws';
 import YAML from 'yaml';
 import AgentInputBuilder, { inputType } from './agent-input-builder.js';
 import { renderSummary, renderSummaryDiff } from './diff-snippet.js';
-import { cleanupStaleBranches } from './git.js';
 import parser from './parser.js';
 import { parsePlanResponse } from './plan-response.js';
 import { isSessionId, reserveSessionId } from './session-id.js';
@@ -1049,8 +1048,6 @@ process.stdin.on('data', async (chunk) => {
 
           initializeParams = message.params;
           await syncShoakuLists(initializeParams.initializationOptions.filePath);
-
-          cleanupStaleBranches(initializeParams.rootPath);
 
           lspInputBuilder = new AgentInputBuilder(initializeParams.rootPath, 10000);
           lspInputBuilder.onAgentInput(async (input) => {
