@@ -2751,7 +2751,7 @@ private fun StatusPill(
             .background(background)
             .border(1.dp, border, RoundedCornerShape(999.dp))
             .padding(
-                horizontal = 8.dp,
+                horizontal = 12.dp,
                 vertical = 3.dp
             ),
         contentAlignment = Alignment.Center
