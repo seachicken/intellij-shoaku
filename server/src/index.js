@@ -455,7 +455,6 @@ async function startNextGoal() {
         unavailableGoals.add(id);
         const goal = findItemByShoakuId(lists, id);
         if (goal) startupWorkflowByGoal.set(startupGoalKey(goal), { stage: 'error', detail: error.message });
-        logWarn(`Cannot inspect saved session ${id}: ${error.message}`);
         syncShoakuLists(initializeParams.initializationOptions.filePath).catch(error => logWarn(error.message));
         return false;
       }
@@ -480,7 +479,6 @@ function restoreGoal(goal) {
     unavailableGoals.add(goal.shoakuId);
     if (runningGoalId === goal.shoakuId) runningGoalId = undefined;
     startupWorkflowByGoal.set(startupGoalKey(goal), { stage: 'error', detail: error.message });
-    logWarn(`Cannot restore unfinished session ${goal.shoakuId}: ${error.message}. Skipped automatic restoration; open the session to retry.`);
   }).finally(() => {
     startingGoals.delete(goal.shoakuId);
     syncShoakuLists(initializeParams.initializationOptions.filePath)
