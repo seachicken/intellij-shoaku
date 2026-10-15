@@ -704,7 +704,7 @@ private fun SessionTaskPane(
                 }
             }
             ImplementationDocumentsPane(session, project, Modifier.weight(1f).fillMaxWidth())
-            SessionSectionHeader(title = "Discuss the change")
+            SessionSectionHeader(title = "Chat")
             ConversationNavigationCard(
                 enabled = !session.shoakuId.isNullOrBlank() &&
                     !session.sessionId.isNullOrBlank() &&
