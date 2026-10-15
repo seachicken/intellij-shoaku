@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.7.1"
+version = "0.7.2"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -54,9 +54,13 @@ intellijPlatform {
         }
 
         changeNotes = """
+            <h2>Improvements</h2>
+            <ul>
+                <li>Unify workflow status with token usage indicator</li>
+            </ul>
             <h2>Bug Fixes</h2>
             <ul>
-                <li>Fix goal restoration failures and goals file synchronization</li>
+                <li>Remove obsolete Git cleanup during server initialization</li>
             </ul>
         """.trimIndent()
     }
