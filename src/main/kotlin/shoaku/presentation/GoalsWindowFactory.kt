@@ -686,6 +686,7 @@ private fun SessionTaskPane(
                     TokenUsageIndicator(
                         tokenUsage = effectiveTokenUsage,
                         status = session.status,
+                        workflow = session.workflow,
                         onIncreaseBudget = {
                             val shoakuId = session.shoakuId ?: return@TokenUsageIndicator
                             val currentMax = viewModel.tokenBudgetOverrides[shoakuId]
@@ -698,8 +699,6 @@ private fun SessionTaskPane(
                 }
             )
             session.workflow?.let { workflow ->
-                val display = workflow.toWorkflowDisplayState()
-                StatusPill(label = display.label, tone = display.tone, pulse = statusPulse(), minWidth = Dp.Unspecified)
                 if (workflow.stage in setOf("error", "needsInput", "needsApproval", "blocked", "reviewPending", "budgetLimited", "usageLimited")) {
                     Text(workflow.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
                 }
@@ -2361,9 +2360,11 @@ private fun finalCheckResponse(messages: List<Message>): Message? =
 private fun TokenUsageIndicator(
     tokenUsage: TokenUsageUi?,
     status: AgentStatusUi? = null,
+    workflow: GoalWorkflowUi? = null,
     onIncreaseBudget: (() -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val display = workflow?.toWorkflowDisplayState() ?: status?.toSummaryStatusState()
     val explorerBudgetExhausted = tokenUsage?.isExplorerTokenBudgetExhausted() == true
     val activity = remember(status, explorerBudgetExhausted) {
         activityFromStatus(status, explorerBudgetExhausted)
@@ -2419,6 +2420,23 @@ private fun TokenUsageIndicator(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (display != null && display.label.isNotBlank()) {
+                Text(
+                    text = display.label,
+                    fontSize = 11.sp,
+                    color = when (display.tone) {
+                        AgentStatusTone.Running -> TodoColors.statusRunningText
+                        AgentStatusTone.Error -> TodoColors.statusError
+                        else -> TodoColors.secondaryText
+                    }
+                )
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .height(12.dp)
+                        .background(TodoColors.tokenUsageTrackBorder.copy(alpha = 0.45f))
+                )
+            }
             Box(
                 modifier = Modifier
                     .size(10.dp)
