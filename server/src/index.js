@@ -23,6 +23,7 @@ import { assignGoalIds } from './goal-ids.js';
 import { activeGoalId, canAdvanceGoal, nextQueueGoal } from './goal-queue.js';
 import { ConversationUpdates } from './conversation-updates.js';
 import { GoalsFileWatcher } from './goals-file-watcher.js';
+import { requirementSnapshots } from './goal-requirements.js';
 
 const exec = promisify(child_process.exec);
 const appServerSocketPath = join(tmpdir(), `shoaku-app-server-${process.pid}.sock`);
@@ -1208,14 +1209,21 @@ async function createDiff(taskIndex, tempWorkspace) {
 
 const goalsFileWatcher = new GoalsFileWatcher();
 async function watchGoalsFileUpdates() {
+  let previous = requirementSnapshots(lists);
   await goalsFileWatcher.watch(initializeParams.initializationOptions.filePath, async filePath => {
       await syncShoakuLists(filePath);
       if (filePath !== initializeParams.initializationOptions.filePath) return;
-      for (const goal of lists) {
-        if (!shoakuToSession.has(goal.shoakuId)) continue;
-        goalInputBuilderFor(goal.shoakuId).ingest({ type: inputType.GOAL_HUMAN,
-          content: { goal: goal.content, children: goal.children } });
+      const current = requirementSnapshots(lists);
+      for (const [id, content] of current) {
+        const before = previous.get(id);
+        if (!before || !shoakuToSession.has(id) || JSON.stringify(before) === JSON.stringify(content)) continue;
+        const builder = goalInputBuilderFor(id);
+        if (!builder.prevOperation.has(inputType.GOAL_HUMAN)) {
+          builder.prevOperation.set(inputType.GOAL_HUMAN, before);
+        }
+        builder.ingest({ type: inputType.GOAL_HUMAN, content });
       }
+      previous = current;
   }, err => {
     if (err.code !== 'ENOENT') {
       logError(`Error watching human goals file: ${err}`);
