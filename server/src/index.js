@@ -336,6 +336,7 @@ async function refreshGoal(shoakuId, input) {
           '[Shoaku:IGNORE]',
           'Set requiredInput to a concise, specific question only when missing user information prevents safe implementation. Otherwise return an empty string. If blocked on user input, plansMd may be empty; do not dispatch implementation until the question is answered.',
           'Return plansMd as a complete plain Markdown checklist in execution order for goal/set, with the human goal as its heading.',
+          'Immediately after the goal heading and before any section headings or checklist items, write a short overview in 1–3 sentences in the user\'s language. State the outcome you aim to achieve and what successful completion means, so the human can confirm your understanding. Keep implementation steps in the checklist below, not in the overview.',
           'For plansMd, treat human tasks as requirements and constraints, not an exhaustive implementation plan. Use the available conversation and repository context to derive concrete, independently reviewable steps within the human goal\'s scope, including necessary investigation, implementation, integration, and acceptance verification. Split or combine tasks as needed; do not invent unresolved technical details.',
           'Record changed design decisions and constraints in plansMd even if the task titles remain the same. Ordinary explanatory questions do not authorize implementation changes.',
           'Do not copy human completion states as proof that Explorer work is complete.',

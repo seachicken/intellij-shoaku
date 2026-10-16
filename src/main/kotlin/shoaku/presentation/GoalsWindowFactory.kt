@@ -516,7 +516,24 @@ private fun SessionDetailContent(
 }
 
 private data class ImplementationTask(val title: String, val completed: Boolean)
-private data class ImplementationArtifacts(val tasks: List<ImplementationTask>, val hasPlan: Boolean = false)
+private data class ImplementationArtifacts(
+    val tasks: List<ImplementationTask>,
+    val hasPlan: Boolean = false,
+    val overview: String = ""
+)
+
+// The plan's introductory prose describes the intended outcome; task sections
+// and fenced examples must not become part of that overview.
+internal fun planOverview(markdown: String): String {
+    val lines = markdown.lineSequence().dropWhile { it.isBlank() }
+        .dropWhile { it.trimStart().startsWith("# ") }
+        .dropWhile { it.isBlank() }
+    return lines.takeWhile { line ->
+        val text = line.trimStart()
+        !text.startsWith("#") && !text.startsWith("```") && !text.startsWith("~~~") &&
+            !Regex("""^(?:[-*+]|\d+[.)])\s+.*$""").matches(text)
+    }.joinToString(" ") { it.trim() }.trim()
+}
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -573,7 +590,9 @@ private fun ImplementationDocumentsPane(session: Item, project: Project?, modifi
                     val completed = progress[title]?.getOrNull(occurrence)?.completed ?: task.completed
                     task.copy(completed = completed)
                 }
-                ImplementationArtifacts(tasks, Files.isRegularFile(root.resolve("PLANS.md")))
+                val overview = runCatching { planOverview(Files.readString(root.resolve("PLANS.md"))) }
+                    .getOrDefault("")
+                ImplementationArtifacts(tasks, Files.isRegularFile(root.resolve("PLANS.md")), overview)
             }
             delay(1500)
         }
@@ -581,6 +600,10 @@ private fun ImplementationDocumentsPane(session: Item, project: Project?, modifi
     val tasks = artifacts.tasks
     val currentIndex = tasks.indexOfFirst { !it.completed }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (artifacts.overview.isNotBlank()) {
+            Text(artifacts.overview, color = TodoColors.primaryText, fontSize = 13.sp,
+                modifier = Modifier.fillMaxWidth())
+        }
         Text(when {
             !artifacts.hasPlan -> "Preparing plan…"
             tasks.isEmpty() -> "No steps yet."
