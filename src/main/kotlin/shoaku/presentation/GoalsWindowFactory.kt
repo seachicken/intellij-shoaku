@@ -722,13 +722,6 @@ private fun SessionTaskPane(
                     )
                 }
             )
-            session.workflow?.let { workflow ->
-                if (workflow.stage in setOf("error", "needsInput", "needsApproval", "blocked", "reviewPending", "budgetLimited", "usageLimited")) {
-                    Text(workflow.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
-                }
-            }
-            ImplementationDocumentsPane(session, project, Modifier.weight(1f).fillMaxWidth())
-            SessionSectionHeader(title = "Chat")
             ConversationNavigationCard(
                 enabled = !session.shoakuId.isNullOrBlank() &&
                     !session.sessionId.isNullOrBlank() &&
@@ -742,7 +735,12 @@ private fun SessionTaskPane(
                     )
                 }
             )
-
+            session.workflow?.let { workflow ->
+                if (workflow.stage in setOf("error", "needsInput", "needsApproval", "blocked", "reviewPending", "budgetLimited", "usageLimited")) {
+                    Text(workflow.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
+                }
+            }
+            ImplementationDocumentsPane(session, project, Modifier.weight(1f).fillMaxWidth())
         }
     }
 }
@@ -1490,7 +1488,7 @@ private fun ConversationNavigationCard(
     onClick: () -> Unit
 ) {
     SessionActionRow(
-        title = "Open Codex",
+        title = "Ask Codex",
         iconKey = AllIconsKeys.General.Balloon,
         enabled = enabled,
         onClick = onClick,
