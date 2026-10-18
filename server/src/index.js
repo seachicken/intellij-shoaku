@@ -344,7 +344,9 @@ async function refreshGoal(shoakuId, input) {
           'For plansMd, treat human tasks as requirements and constraints, not an exhaustive implementation plan. Use the available conversation and repository context to derive concrete, independently reviewable steps within the human goal\'s scope, including necessary investigation, implementation, integration, and acceptance verification. Split or combine tasks as needed; do not invent unresolved technical details.',
           'Record changed design decisions and constraints in plansMd even if the task titles remain the same. Ordinary explanatory questions do not authorize implementation changes.',
           'Do not copy human completion states as proof that Explorer work is complete.',
-          'Generate plansMd when no previous plan exists. If an existing plan lacks the required objective paragraph at the top or labels it as completion criteria, add or relabel it as an objective while preserving its meaning, tasks, and other content. Otherwise update the plan only when the human goal, requirements, or constraints change. Changes only to completion states or Explorer tasks do not change the plan; preserve the previous plansMd exactly.'
+          'Generate plansMd when no previous plan exists. If an existing plan lacks the required objective paragraph at the top or labels it as completion criteria, add or relabel it as an objective while preserving its meaning. Whenever the objective, human goal, requirements, or constraints change, revise the checklist in the same response so its tasks, order, and nesting implement the updated objective; remove obsolete steps and add or adapt necessary implementation and verification steps.',
+          'Use Explorer investigation findings and implementation feedback to revise the plan when they reveal a necessary change in approach, dependencies, or verification within the authorized goal. The objective and implementation checklist must remain consistent. Do not expand the user scope or treat an ordinary explanatory question as authorization to change it. Changes only to completion checkboxes, or feedback that requires no change in approach, must preserve the previous plansMd exactly to avoid a plan-update loop.',
+          'When revising the checklist, preserve unaffected tasks and retain completion only for unchanged tasks whose work still satisfies the updated plan. Reopen tasks when changed requirements invalidate their previous completion. Explorer will receive the entire updated plan and adapt its existing implementation rather than start over.'
         ].join('\n')
       }
     ],
@@ -865,7 +867,7 @@ async function dispatchExplorerGoal(shoakuId, plansMd, reviewRepair = null, docu
     '',
     documentationOnly
       ? 'Read the authoritative .shoaku/PLANS.md as context for explaining the existing committed implementation.'
-      : 'Read .shoaku/PLANS.md and synchronize .shoaku/goals.md with the authoritative plan. Implement independently of human checklist completion. Organize your implementation commits and document the result in .shoaku/RESULTS.md and .shoaku/commits/<full-sha>.md.',
+      : 'Read .shoaku/PLANS.md and synchronize .shoaku/goals.md with the authoritative plan. When the plan changes, adapt the existing implementation to its updated objective and checklist: preserve useful completed work, revisit work invalidated by the changes, and stop obsolete steps. Retain completion only for matching tasks whose work still satisfies the current plan. Implement independently of human checklist completion. Organize your implementation commits and document the result in .shoaku/RESULTS.md and .shoaku/commits/<full-sha>.md.',
     '',
     '<plan_md>',
     plansMd,
