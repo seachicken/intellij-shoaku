@@ -18,7 +18,7 @@ internal data class ReviewGuideResult(val guide: ReviewGuide?, val issue: String
 
 internal fun readReviewGuide(workspace: Path, details: ReviewCommitDetails, reader: GitCommitReviewReader): ReviewGuideResult {
     val path = workspace.resolve(".shoaku/commits/${details.commit.hash}.review.json")
-    if (!Files.exists(path)) return ReviewGuideResult(null, "Design-to-code links have not been generated for this commit. Read the design details; links will appear automatically when available.")
+    if (!Files.exists(path)) return ReviewGuideResult(null, "Design-to-code links have not been generated for this commit. The Markdown explanation is shown instead; links will appear automatically when available.")
     return try {
         require(Files.size(path) <= 512 * 1024) { "Design map is too large." }
         val json = JsonParser.parseString(Files.readString(path)).asJsonObject

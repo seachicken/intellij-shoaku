@@ -8,6 +8,7 @@ import com.intellij.diff.chains.DiffRequestProducerException
 import com.intellij.diff.chains.SimpleDiffRequestChain
 import com.intellij.diff.impl.CacheDiffRequestChainProcessor
 import com.intellij.diff.impl.DiffRequestProcessorListener
+import com.intellij.diff.impl.DiffSettingsHolder.DiffSettings
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.progress.ProgressIndicator
@@ -26,6 +27,12 @@ import com.intellij.openapi.util.Pair
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.testFramework.LightVirtualFile
+import com.intellij.ui.treeStructure.Tree
+import com.intellij.ui.TreeSpeedSearch
+import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.DefaultTreeModel
+import javax.swing.tree.TreePath
+import javax.swing.tree.TreeSelectionModel
 import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
@@ -74,10 +81,13 @@ class CommitReviewEditorProvider : FileEditorProvider, DumbAware {
 
 private class CommitReviewEditor(private val project: Project, private val reviewFile: CommitReviewVirtualFile) : UserDataHolderBase(), FileEditor {
     private val root = JBPanel<JBPanel<*>>(BorderLayout())
-    private val commitPicker = JComboBox<ReviewCommit>()
-    private val filePicker = JComboBox<ReviewCommitFile>()
+    private val changesTree = Tree()
+    private var selectedCommit: ReviewCommit? = null
+    private var selectedFile: ReviewCommitFile? = null
+    private data class LoadedCommit(val details: ReviewCommitDetails, val guideResult: ReviewGuideResult)
+    private var loadedCommits = emptyList<LoadedCommit>()
+    private val fileNodes = mutableMapOf<FileLocation, DefaultMutableTreeNode>()
     private val status = JBLabel("Loading commits…")
-    private val explanation = JBPanel<JBPanel<*>>(BorderLayout())
     private val overview = JBPanel<JBPanel<*>>(BorderLayout()).apply {
         add(JBLabel("Loading outcome…"), BorderLayout.NORTH)
     }
@@ -102,33 +112,45 @@ private class CommitReviewEditor(private val project: Project, private val revie
     private val documentEditors = mutableMapOf<JComponent, kotlin.Pair<FileEditorProvider, FileEditor>>()
 
     init {
-        commitPicker.name = "shoaku.commitReview.commits"
-        filePicker.name = "shoaku.commitReview.files"
+        changesTree.name = "shoaku.commitReview.changes"
+        changesTree.isRootVisible = false
+        changesTree.showsRootHandles = true
+        changesTree.selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
+        TreeSpeedSearch.installOn(changesTree)
+        changesTree.addTreeSelectionListener {
+            if (!changingPickers) {
+                val value = (changesTree.lastSelectedPathComponent as? DefaultMutableTreeNode)?.userObject
+                when (value) {
+                    is FileLocation -> {
+                        selectedCommit = loadedCommits.firstOrNull { it.details.commit.hash == value.hash }?.details?.commit
+                        loadCommit(value.file.path)
+                    }
+                    is ReviewCommit -> {
+                        selectedCommit = value
+                        loadCommit()
+                    }
+                }
+            }
+        }
         stepPicker.name = "shoaku.commitReview.steps"
         layoutPicker.name = "shoaku.commitReview.layout"
         layoutPicker.toolTipText = "Auto layout places the explanation below code when the editor is narrow. Drag the divider to resize."
         stepPicker.alignmentX = 0f
         guidePanel.name = "shoaku.commitReview.guide"
         val controls = JBPanel<JBPanel<*>>(BorderLayout(8, 4))
-        val commitRow = JBPanel<JBPanel<*>>(BorderLayout(8, 0))
-        commitRow.add(JBLabel("Change"), BorderLayout.WEST)
-        commitRow.add(commitPicker, BorderLayout.CENTER)
-        controls.add(commitRow, BorderLayout.NORTH)
-        val fileRow = JBPanel<JBPanel<*>>(BorderLayout(8, 0))
-        fileRow.add(JBLabel("File"), BorderLayout.WEST)
-        fileRow.add(filePicker, BorderLayout.CENTER)
-        fileRow.add(layoutPicker, BorderLayout.EAST)
-        controls.add(fileRow, BorderLayout.CENTER)
-        controls.add(status, BorderLayout.SOUTH)
+        controls.add(status, BorderLayout.CENTER)
+        controls.add(layoutPicker, BorderLayout.EAST)
         val changes = JBPanel<JBPanel<*>>(BorderLayout())
         changes.add(controls, BorderLayout.NORTH)
         split.firstComponent = diff.component
-        split.secondComponent = JTabbedPane().apply {
+        split.secondComponent = guidePanel.apply {
             minimumSize = Dimension(0, 0)
-            addTab("Explanation", guidePanel)
-            addTab("Design details", explanation)
+            border = BorderFactory.createTitledBorder("Explanation")
         }
-        changes.add(split, BorderLayout.CENTER)
+        changes.add(OnePixelSplitter(false, 0.23f).apply {
+            firstComponent = JBScrollPane(changesTree)
+            secondComponent = split
+        }, BorderLayout.CENTER)
         root.add(JTabbedPane().apply {
             name = "shoaku.outcome.sections"
             addTab("Design overview", overview)
@@ -138,8 +160,6 @@ private class CommitReviewEditor(private val project: Project, private val revie
         root.addComponentListener(object : ComponentAdapter() {
             override fun componentResized(event: ComponentEvent) = updateLayout()
         })
-        commitPicker.addActionListener { if (!changingPickers) loadCommit() }
-        filePicker.addActionListener { if (!changingPickers) loadFile() }
         stepPicker.addActionListener { if (!choosingStep) (stepPicker.selectedItem as? GuideStep)?.let { selectStep(it, true) } }
         loadCommits()
     }
@@ -153,22 +173,23 @@ private class CommitReviewEditor(private val project: Project, private val revie
             "${Files.getLastModifiedTime(path)}:${Files.size(path)}"
         } else "missing"
         return OutcomeSnapshot(commits, hash, stamp(root.resolve("RESULTS.md")),
-            stamp(root.resolve("commits/$hash.md")), stamp(root.resolve("commits/$hash.review.json")))
+            commits.joinToString { stamp(root.resolve("commits/${it.hash}.md")) },
+            commits.joinToString { stamp(root.resolve("commits/${it.hash}.review.json")) })
     }
 
     private fun checkForUpdates() {
         if (disposed || project.isDisposed || !updateTimer.isRunning || loading || checkingUpdates) return
         checkingUpdates = true
-        val hash = (commitPicker.selectedItem as? ReviewCommit)?.hash
+        val hash = selectedCommit?.hash
         ApplicationManager.getApplication().executeOnPooledThread {
             val snapshot = runCatching { readSnapshot(hash) }
             ApplicationManager.getApplication().invokeLater {
                 checkingUpdates = false
-                if (disposed || project.isDisposed || !updateTimer.isRunning || loading || hash != (commitPicker.selectedItem as? ReviewCommit)?.hash) return@invokeLater
+                if (disposed || project.isDisposed || !updateTimer.isRunning || loading || hash != selectedCommit?.hash) return@invokeLater
                 val next = snapshot.getOrNull() ?: return@invokeLater
                 val previous = lastSnapshot
                 lastSnapshot = next
-                val displayed = (0 until commitPicker.itemCount).map(commitPicker::getItemAt)
+                val displayed = loadedCommits.map { it.details.commit }
                 if (next.commits != displayed) {
                     loadCommits(next.commits)
                 } else {
@@ -176,10 +197,9 @@ private class CommitReviewEditor(private val project: Project, private val revie
                         showDocument(reviewFile.workspace.resolve(".shoaku/RESULTS.md"), overview,
                             "The outcome summary will appear as work progresses.")
                     }
-                    if (hash != null && (previous == null || previous.hash == hash &&
+                    if (hash != null && (previous == null ||
                             (next.design != previous.design || next.map != previous.map))) {
-                        loadCommit((filePicker.selectedItem as? ReviewCommitFile)?.path,
-                            (stepPicker.selectedItem as? GuideStep)?.id)
+                        loadCommits(next.commits)
                     }
                 }
             }
@@ -219,79 +239,90 @@ private class CommitReviewEditor(private val project: Project, private val revie
 
     private fun loadCommits(updatedCommits: List<ReviewCommit>? = null) {
         status.text = "Loading commits…"
-        val previous = (commitPicker.selectedItem as? ReviewCommit)?.hash
-        val previousFile = (filePicker.selectedItem as? ReviewCommitFile)?.path
-        val previousStep = (stepPicker.selectedItem as? GuideStep)?.id
-        selectedDetails = null
-        changingPickers = true
-        filePicker.model = DefaultComboBoxModel()
-        changingPickers = false
-        diff.setRequest(MessageDiffRequest("Loading commits…"))
-        clearDocument()
-        guide = null
-        guideIssue = "Loading the design-to-code map…"
-        renderGuide()
+        val previous = selectedCommit?.hash
         load({
             val commits = updatedCommits ?: reader.commits()
-            val selected = commits.firstOrNull { it.hash == previous } ?: commits.firstOrNull()
-            readSnapshot(selected?.hash, commits)
-        }) { snapshot ->
+            val loaded = commits.map { commit ->
+                val details = reader.details(commit)
+                LoadedCommit(details, readReviewGuide(reviewFile.workspace, details, reader))
+            }
+            readSnapshot(previous ?: commits.firstOrNull()?.hash, commits) to loaded
+        }) { (snapshot, loaded) ->
+            val selectedHash = selectedCommit?.hash
+            val previousFile = selectedFile?.path
+            val previousStep = (stepPicker.selectedItem as? GuideStep)?.id
             lastSnapshot = snapshot
-            val commits = snapshot.commits
+            loadedCommits = loaded
             showDocument(reviewFile.workspace.resolve(".shoaku/RESULTS.md"), overview,
                 "The outcome summary will appear as work progresses.")
+            val treeRoot = DefaultMutableTreeNode("Changes")
+            fileNodes.clear()
+            loaded.forEach { entry ->
+                val commitNode = DefaultMutableTreeNode(entry.details.commit)
+                treeRoot.add(commitNode)
+                entry.details.files.forEach { file ->
+                    val location = FileLocation(entry.details.commit.hash, file)
+                    val node = DefaultMutableTreeNode(location, false)
+                    commitNode.add(node)
+                    fileNodes[location] = node
+                }
+            }
             changingPickers = true
-            commitPicker.model = DefaultComboBoxModel(commits.toTypedArray())
-            commits.firstOrNull { it.hash == previous }?.let { commitPicker.selectedItem = it }
+            changesTree.model = DefaultTreeModel(treeRoot)
+            for (row in 0 until loaded.size) {
+                changesTree.expandPath(TreePath((treeRoot.getChildAt(row) as DefaultMutableTreeNode).path))
+            }
             changingPickers = false
-            status.text = if (commits.isEmpty()) "No changes ready to review yet. Updates appear automatically." else "${commits.size} changes to review"
-            if (commits.isEmpty()) diff.setRequest(MessageDiffRequest("No changes ready to review yet.")) else loadCommit(previousFile, previousStep)
+            selectedCommit = loaded.firstOrNull { it.details.commit.hash == selectedHash }?.details?.commit
+                ?: loaded.firstOrNull()?.details?.commit
+            if (loaded.isEmpty()) {
+                selectedDetails = null
+                selectedFile = null
+                guide = null
+                guideIssue = "No changes ready to review yet. Updates appear automatically."
+                renderGuide()
+                status.text = guideIssue
+                diff.setRequest(MessageDiffRequest("No changes ready to review yet."))
+            } else loadCommit(previousFile, previousStep)
         }
     }
 
     private fun loadCommit(preferredFile: String? = null, preferredStep: String? = null) {
-        val commit = commitPicker.selectedItem as? ReviewCommit ?: return
-        selectedDetails = null
-        changingPickers = true
-        filePicker.model = DefaultComboBoxModel()
-        changingPickers = false
-        status.text = "Loading ${commit.hash.take(12)}…"
-        diff.setRequest(MessageDiffRequest("Loading commit…"))
-        clearDocument()
-        guide = null
-        guideIssue = "Loading the design-to-code map…"
+        val entry = loadedCommits.firstOrNull { it.details.commit == selectedCommit } ?: return
+        selectCommitContext(entry, preferredStep)
+        selectedFile = entry.details.files.firstOrNull { it.path == preferredFile } ?: entry.details.files.firstOrNull()
+        if (selectedFile == null) {
+            status.text = "This commit has no file changes."
+            diff.setRequest(MessageDiffRequest(status.text))
+        } else loadFile()
+    }
+
+    // Updating the explanation must not reinstall the chain when native diff navigation crosses a commit.
+    private fun selectCommitContext(entry: LoadedCommit, preferredStep: String? = null) {
+        selectedCommit = entry.details.commit
+        selectedDetails = entry.details
+        guide = entry.guideResult.guide
+        guideIssue = entry.guideResult.issue
+        choosingStep = true
+        stepPicker.model = DefaultComboBoxModel(guide?.steps?.toTypedArray() ?: emptyArray())
+        guide?.steps?.firstOrNull { it.id == preferredStep }?.let { stepPicker.selectedItem = it }
+        choosingStep = false
+        status.toolTipText = entry.details.commit.hash
         renderGuide()
-        load({
-            val details = reader.details(commit)
-            details to readReviewGuide(reviewFile.workspace, details, reader)
-        }) { (details, result) ->
-            selectedDetails = details
-            guide = result.guide
-            guideIssue = result.issue
-            choosingStep = true
-            stepPicker.model = DefaultComboBoxModel(guide?.steps?.toTypedArray() ?: emptyArray())
-            choosingStep = false
-            showDocument(commit)
-            changingPickers = true
-            filePicker.model = DefaultComboBoxModel(details.files.toTypedArray())
-            details.files.firstOrNull { it.path == preferredFile }?.let { filePicker.selectedItem = it }
-            changingPickers = false
-            status.text = "${details.files.size} files · parent ${details.parent?.take(12) ?: "empty tree"}"
-            status.toolTipText = commit.hash
-            renderGuide()
-            if (details.files.isEmpty()) diff.setRequest(MessageDiffRequest("This commit has no file changes."))
-            else if (guide != null) {
-                val selected = guide!!.steps.firstOrNull { it.id == preferredStep } ?: guide!!.steps.first()
-                selectStep(selected, preferredFile == null)
-                if (preferredFile != null) loadFile()
-            }
-            else loadFile()
-        }
+    }
+
+    private fun syncTreeSelection(location: FileLocation) {
+        val node = fileNodes[location] ?: return
+        changingPickers = true
+        val path = TreePath(node.path)
+        changesTree.selectionPath = path
+        changesTree.scrollPathToVisible(path)
+        changingPickers = false
     }
 
     private fun loadFile(anchor: GuideAnchor? = null) {
         val details = selectedDetails ?: return
-        val file = filePicker.selectedItem as? ReviewCommitFile ?: return
+        val file = selectedFile ?: return
         if (anchor == null) {
             val related = guide?.steps?.filter { step -> step.anchors.any { it.path == file.path } }.orEmpty()
             val current = stepPicker.selectedItem as? GuideStep
@@ -301,48 +332,58 @@ private class CommitReviewEditor(private val project: Project, private val revie
         val step = stepPicker.selectedItem as? GuideStep
         if (step != null && guide != null && step.anchors.any { it.path == file.path }) showStepStatus(step, anchor ?: step.anchors.first { it.path == file.path })
         else status.text = "${details.files.size} files · parent ${details.parent?.take(12) ?: "empty tree"}"
-        val map = guide
-        val producers = details.files.map { changedFile ->
-            object : DiffRequestProducer {
-                override fun getName() = changedFile.path
-                override fun process(context: UserDataHolder, indicator: ProgressIndicator): DiffRequest {
-                    indicator.checkCanceled()
-                    val content = try { reader.content(details, changedFile) }
-                    catch (error: Exception) { throw DiffRequestProducerException(error) }
-                    val request = if (content.unavailableReason != null) {
-                        MessageDiffRequest(changedFile.path, content.unavailableReason)
-                    } else {
-                        val factory = DiffContentFactory.getInstance()
-                        val type = FileTypeManager.getInstance().getFileTypeByFileName(changedFile.path.substringAfterLast('/'))
-                        SimpleDiffRequest(changedFile.path,
-                            factory.create(project, content.before, type), factory.create(project, content.after, type),
-                            details.parent?.take(12) ?: "Before", details.commit.hash.take(12))
+        val locations = loadedCommits.flatMap { entry -> entry.details.files.map { FileLocation(entry.details.commit.hash, it) } }
+        val anchorLocation = FileLocation(details.commit.hash, file)
+        val producers = loadedCommits.flatMap { entry ->
+            entry.details.files.map { changedFile ->
+                val details = entry.details
+                val map = entry.guideResult.guide
+                val location = FileLocation(details.commit.hash, changedFile)
+                object : DiffRequestProducer {
+                    override fun getName() = "${details.commit.hash.take(12)} · ${changedFile.path}"
+                    override fun process(context: UserDataHolder, indicator: ProgressIndicator): DiffRequest {
+                        indicator.checkCanceled()
+                        val content = try { reader.content(details, changedFile) }
+                        catch (error: Exception) { throw DiffRequestProducerException(error) }
+                        val request = if (content.unavailableReason != null) {
+                            MessageDiffRequest(changedFile.path, content.unavailableReason)
+                        } else {
+                            val factory = DiffContentFactory.getInstance()
+                            val type = FileTypeManager.getInstance().getFileTypeByFileName(changedFile.path.substringAfterLast('/'))
+                            SimpleDiffRequest(changedFile.path,
+                                factory.create(project, content.before, type), factory.create(project, content.after, type),
+                                details.parent?.take(12) ?: "Before", details.commit.hash.take(12))
+                        }
+                        request.putUserData(ReviewDiffLocationKey, location)
+                        if (anchor != null && location == anchorLocation) {
+                            request.putUserData(DiffUserDataKeys.SCROLL_TO_LINE,
+                                Pair.create(if (anchor.side == "before") Side.LEFT else Side.RIGHT, anchor.startLine - 1))
+                        }
+                        map?.let {
+                            request.putUserData(CodeTraceKey, CodeTraceData(it.steps, changedFile.path,
+                                { if (selectedCommit?.hash == location.hash) (stepPicker.selectedItem as? GuideStep)?.id else null },
+                                { selected -> if (!disposed && selectedDetails?.commit?.hash == details.commit.hash &&
+                                    selectedFile?.path == changedFile.path &&
+                                    (stepPicker.selectedItem as? GuideStep)?.id != selected.id) selectStep(selected, false) }))
+                        }
+                        return request
                     }
-                    request.putUserData(ReviewDiffPathKey, changedFile.path)
-                    if (anchor?.path == changedFile.path) {
-                        request.putUserData(DiffUserDataKeys.SCROLL_TO_LINE,
-                            Pair.create(if (anchor.side == "before") Side.LEFT else Side.RIGHT, anchor.startLine - 1))
-                    }
-                    map?.let {
-                        request.putUserData(CodeTraceKey, CodeTraceData(it.steps, changedFile.path,
-                            { (stepPicker.selectedItem as? GuideStep)?.id },
-                            { selected -> if (!disposed && selectedDetails?.commit?.hash == details.commit.hash &&
-                                (filePicker.selectedItem as? ReviewCommitFile)?.path == changedFile.path &&
-                                (stepPicker.selectedItem as? GuideStep)?.id != selected.id) selectStep(selected, false) }))
-                    }
-                    return request
                 }
             }
         }
-        diff.setFiles(producers, details.files.indexOf(file))
+        val location = FileLocation(details.commit.hash, file)
+        syncTreeSelection(location)
+        diff.setFiles(producers, locations.indexOf(location))
     }
 
-    private fun onDiffFileSelected(path: String) {
+    private fun onDiffFileSelected(location: FileLocation) {
         if (disposed) return
-        val file = selectedDetails?.files?.firstOrNull { it.path == path } ?: return
-        changingPickers = true
-        filePicker.selectedItem = file
-        changingPickers = false
+        val entry = loadedCommits.firstOrNull { it.details.commit.hash == location.hash } ?: return
+        if (selectedDetails?.commit != entry.details.commit) selectCommitContext(entry)
+        val path = location.file.path
+        selectedFile = location.file
+        syncTreeSelection(location)
+        status.text = "${entry.details.commit.hash.take(12)} · ${entry.details.commit.subject} · $path"
         val related = guide?.steps?.filter { step -> step.anchors.any { it.path == path } }.orEmpty()
         val current = stepPicker.selectedItem as? GuideStep
         if (related.isNotEmpty()) selectStep(related.firstOrNull { it.id == current?.id } ?: related.first(), false)
@@ -354,7 +395,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
         stepPicker.selectedItem = step
         choosingStep = false
         renderGuide()
-        val location = step.anchors.firstOrNull { it.path == (filePicker.selectedItem as? ReviewCommitFile)?.path } ?: step.anchors.first()
+        val location = step.anchors.firstOrNull { it.path == selectedFile?.path } ?: step.anchors.first()
         showStepStatus(step, location)
         if (navigate) step.anchors.firstOrNull()?.let(::navigateToAnchor)
     }
@@ -366,15 +407,19 @@ private class CommitReviewEditor(private val project: Project, private val revie
     private fun navigateToAnchor(anchor: GuideAnchor) {
         val details = selectedDetails ?: return
         val file = details.files.firstOrNull { it.path == anchor.path } ?: return
-        changingPickers = true
-        filePicker.selectedItem = file
-        changingPickers = false
+        selectedFile = file
         loadFile(anchor)
     }
 
     private fun renderGuide(unmappedFile: String? = null) {
+        if (guide == null && selectedDetails != null) {
+            val commit = selectedDetails!!.commit
+            showDocument(reviewFile.workspace.resolve(".shoaku/commits/${commit.hash}.md"), guidePanel,
+                guideIssue ?: "Explanation pending for ${commit.hash.take(12)}.")
+            return
+        }
         val previousPosition = (guidePanel.components.firstOrNull() as? JBScrollPane)?.verticalScrollBar?.value ?: 0
-        guidePanel.removeAll()
+        clearDocument(guidePanel)
         val body = GuideBodyPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
@@ -441,7 +486,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
         }
     }
 
-    private fun clearDocument(panel: JComponent = explanation) {
+    private fun clearDocument(panel: JComponent = guidePanel) {
         documentEditors.remove(panel)?.let { (provider, editor) ->
             editor.deselectNotify()
             provider.disposeEditor(editor)
@@ -449,11 +494,6 @@ private class CommitReviewEditor(private val project: Project, private val revie
         panel.removeAll()
         panel.revalidate()
         panel.repaint()
-    }
-
-    private fun showDocument(commit: ReviewCommit) {
-        val path = reviewFile.workspace.resolve(".shoaku/commits/${commit.hash}.md")
-        showDocument(path, explanation, "Explanation pending for ${commit.hash.take(12)}.")
     }
 
     private fun showDocument(path: Path, panel: JComponent, pending: String) {
@@ -506,7 +546,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
     }
 
     override fun getComponent(): JComponent = root
-    override fun getPreferredFocusedComponent(): JComponent = commitPicker
+    override fun getPreferredFocusedComponent(): JComponent = changesTree
     override fun getName() = if (reviewFile.isPrReview) "PR review" else "Outcome"
     override fun getFile(): VirtualFile = reviewFile
     override fun setState(state: FileEditorState) {}
@@ -532,12 +572,20 @@ private class GuideBodyPanel : JBPanel<GuideBodyPanel>(), Scrollable {
     override fun getScrollableTracksViewportHeight() = false
 }
 
-private val ReviewDiffPathKey = Key.create<String>("shoaku.outcome.diff.path")
+private data class FileLocation(val hash: String, val file: ReviewCommitFile) {
+    override fun toString() = file.toString()
+}
+
+private val ReviewDiffLocationKey = Key.create<FileLocation>("shoaku.outcome.diff.location")
 
 /** Uses the same request-chain processor as the IDE's multi-file diff editor. */
-private class NativeReviewDiffPanel(private val project: Project, private val onFileSelected: (String) -> Unit) {
+private class NativeReviewDiffPanel(private val project: Project, private val onFileSelected: (FileLocation) -> Unit) {
     val component = JBPanel<JBPanel<*>>(BorderLayout())
     private var processor: CacheDiffRequestChainProcessor? = null
+    // Keep cross-file difference navigation local to Outcome, without changing IDE preferences.
+    private val navigationSettings = DiffSettings().apply {
+        isGoToNextFileOnNextDifference = true
+    }
 
     fun setRequest(request: DiffRequest) = install(SimpleDiffRequestChain(request))
 
@@ -547,12 +595,14 @@ private class NativeReviewDiffPanel(private val project: Project, private val on
     private fun install(chain: SimpleDiffRequestChain) {
         processor?.let(Disposer::dispose)
         component.removeAll()
-        val next = CacheDiffRequestChainProcessor(project, chain)
+        val next = object : CacheDiffRequestChainProcessor(project, chain) {
+            override fun getSettings(): DiffSettings = navigationSettings
+        }
         processor = next
         next.putContextUserData(DiffUserDataKeys.FORCE_READ_ONLY, true)
         next.addListener(object : DiffRequestProcessorListener {
             override fun onViewerChanged() {
-                next.activeRequest?.getUserData(ReviewDiffPathKey)?.let(onFileSelected)
+                next.activeRequest?.getUserData(ReviewDiffLocationKey)?.let(onFileSelected)
             }
         }, next)
         component.add(next.component, BorderLayout.CENTER)

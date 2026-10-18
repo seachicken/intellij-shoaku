@@ -546,7 +546,7 @@ private fun ImplementationDocumentsPane(session: Item, project: Project?, modifi
                 onClick = { if (project != null && workspace != null) openCommitReview(project, workspace, true) },
                 enabled = project != null && !workspace.isNullOrBlank(),
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Open design and code") }
+            ) { Text("Open design") }
         }
         return
     }
