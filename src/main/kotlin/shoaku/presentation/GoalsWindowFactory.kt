@@ -494,7 +494,7 @@ private fun SessionDetailContent(
     if (session.sessionId == null) {
         Column(modifier.padding(TodoMetrics.horizontalPadding), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SessionSectionHeader(title = session.content)
-            Text(if (session.workflow?.stage == "notStarted") "Waiting…" else "Preparing…",
+            Text(if (session.workflow?.stage in listOf("notStarted", "pending")) "Waiting…" else "Preparing…",
                 color = TodoColors.secondaryText, fontSize = 12.sp)
             session.workflow?.takeIf { it.stage == "error" }?.let {
                 Text(it.detail, color = TodoColors.secondaryText, fontSize = 12.sp)
@@ -649,15 +649,16 @@ private fun ImplementationDocumentsPane(session: Item, project: Project?, modifi
         ) { Text("Open design and code") }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(Modifier.weight(1f)) {
-                Tooltip(tooltip = { Text("Open the implementation in a separate IDE window") }) {
-                    SessionActionRow(title = "Open in IDE", iconKey = AllIconsKeys.General.OpenDisk,
-                        enabled = canOpenWorktree, onClick = { openImplementation(false) })
-                }
-            }
-            Box(Modifier.weight(1f)) {
                 Tooltip(tooltip = { Text("Open a terminal in this IDE at the implementation directory") }) {
                     SessionActionRow(title = "Open terminal", iconKey = AllIconsKeys.Actions.Execute,
                         enabled = canOpenWorktree, onClick = { openImplementation(true) })
+                }
+            }
+            Box(Modifier.weight(1f)) {
+                Tooltip(tooltip = { Text("Open the implementation in a separate IDE window") }) {
+                    SessionActionRow(title = "Open in IDE", iconKey = AllIconsKeys.General.OpenDisk,
+                        enabled = canOpenWorktree, onClick = { openImplementation(false) },
+                        trailingIconKey = AllIconsKeys.Ide.External_link_arrow)
                 }
             }
         }
@@ -1451,7 +1452,8 @@ private fun SessionActionRow(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    subtitle: String? = null
+    subtitle: String? = null,
+    trailingIconKey: IconKey? = null
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
@@ -1475,6 +1477,10 @@ private fun SessionActionRow(
                 fontWeight = FontWeight.Normal)
             subtitle?.let { Text(it, color = TodoColors.secondaryText, fontSize = 10.sp) }
         }
+        trailingIconKey?.let {
+            Icon(key = it, contentDescription = "Opens in a separate window",
+                tint = contentColor, modifier = Modifier.size(12.dp))
+        }
     }
 }
 
@@ -1484,7 +1490,7 @@ private fun ConversationNavigationCard(
     onClick: () -> Unit
 ) {
     SessionActionRow(
-        title = "Continue with Codex",
+        title = "Open Codex",
         iconKey = AllIconsKeys.General.Balloon,
         enabled = enabled,
         onClick = onClick,
@@ -4493,6 +4499,7 @@ private fun String?.toAgentStatusState(): AgentStatusState {
 private fun GoalWorkflowUi.toWorkflowDisplayState(): AgentStatusState {
     val label = when (stage) {
         "notStarted" -> "Not started"
+        "pending" -> "Pending"
         "planning" -> "Planning"
         "needsInput" -> "Needs input"
         "needsApproval" -> "Needs approval"

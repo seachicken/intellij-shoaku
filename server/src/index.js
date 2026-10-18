@@ -17,10 +17,10 @@ import { isSessionId, reserveSessionId } from './session-id.js';
 import { createManagedWorktree } from './managed-worktree.js';
 import { ensureExplorerBranch, watchGitRequests } from './git-bridge.js';
 import { workflowStatus } from './workflow-status.js';
-import { recordReviewBase, inspectCommitReview, inspectExistingCommitReview } from './commit-review.js';
+import { recordReviewBase, inspectCommitReview } from './commit-review.js';
 import { inferGoalMode, preparePrReview, savePrDesign } from './pr-review.js';
 import { assignGoalIds } from './goal-ids.js';
-import { activeGoalId, canAdvanceGoal, nextQueueGoal } from './goal-queue.js';
+import { nextQueueGoal } from './goal-queue.js';
 import { ConversationUpdates } from './conversation-updates.js';
 import { GoalsFileWatcher } from './goals-file-watcher.js';
 import { requirementSnapshots } from './goal-requirements.js';
@@ -147,7 +147,11 @@ function connectToAppServer() {
             const shoakuId = sessionToShoaku.get(message.params.threadId);
             const session = shoakuToSession.get(shoakuId);
             if (session?.explorerThreadId === message.params.threadId) {
-              chatByShoakuId.get(shoakuId).status.goalStatus = message.params.goal.status;
+              const updatedChat = chatByShoakuId.get(shoakuId);
+              updatedChat.status.goalStatus = message.params.goal.status;
+              if (message.params.goal.status === 'complete' && updatedChat.temporaryWorkspace) {
+                updatedChat.status.review = await inspectGoalReview(updatedChat);
+              }
               await syncShoakuLists(initializeParams.initializationOptions.filePath);
               const chat = chatByShoakuId.get(shoakuId);
               if (message.params.goal.status === 'complete' && chat.status.review?.ready === false && !chat.reviewRepairAttempted) {
@@ -336,11 +340,11 @@ async function refreshGoal(shoakuId, input) {
           '[Shoaku:IGNORE]',
           'Set requiredInput to a concise, specific question only when missing user information prevents safe implementation. Otherwise return an empty string. If blocked on user input, plansMd may be empty; do not dispatch implementation until the question is answered.',
           'Return plansMd as a complete plain Markdown checklist in execution order for goal/set, with the human goal as its heading.',
-          'Immediately after the goal heading and before any section headings or checklist items, write a short overview in 1–3 sentences in the user\'s language. State the outcome you aim to achieve and what successful completion means, so the human can confirm your understanding. Keep implementation steps in the checklist below, not in the overview.',
+          'Every nonempty plansMd must have one concise plain-text paragraph immediately after the goal heading and before any section headings or checklist items, summarizing the intended outcome and direction of the work. Prefix this paragraph with "目標: " for Japanese or the equivalent of "Objective: " in the user\'s language. Describe the concrete, user-visible result being pursued so the human can confirm your understanding; this is an overview, not an exhaustive list of completion criteria. Keep implementation steps in the checklist below. Preserve this objective when updating the plan unless the goal, requirements, or constraints change.',
           'For plansMd, treat human tasks as requirements and constraints, not an exhaustive implementation plan. Use the available conversation and repository context to derive concrete, independently reviewable steps within the human goal\'s scope, including necessary investigation, implementation, integration, and acceptance verification. Split or combine tasks as needed; do not invent unresolved technical details.',
           'Record changed design decisions and constraints in plansMd even if the task titles remain the same. Ordinary explanatory questions do not authorize implementation changes.',
           'Do not copy human completion states as proof that Explorer work is complete.',
-          'Generate plansMd when no previous plan exists. Otherwise update it only when the human goal, requirements, or constraints change. Changes only to completion states or Explorer tasks do not change the plan; preserve the previous plansMd exactly.'
+          'Generate plansMd when no previous plan exists. If an existing plan lacks the required objective paragraph at the top or labels it as completion criteria, add or relabel it as an objective while preserving its meaning, tasks, and other content. Otherwise update the plan only when the human goal, requirements, or constraints change. Changes only to completion states or Explorer tasks do not change the plan; preserve the previous plansMd exactly.'
         ].join('\n')
       }
     ],
@@ -399,23 +403,18 @@ async function refreshGoal(shoakuId, input) {
 const startingGoals = new Set();
 const unavailableGoals = new Set();
 let agentsReady = false;
-let runningGoalId;
 
 function startGoal(goal) {
   if (!agentsReady || !goal?.shoakuId || startingGoals.has(goal.shoakuId) ||
-      (runningGoalId && runningGoalId !== goal.shoakuId)) return;
-  runningGoalId = goal.shoakuId;
+      chatByShoakuId.has(goal.shoakuId)) return;
   startingGoals.add(goal.shoakuId);
   const review = inferGoalMode(goal) === 'review';
   const run = review ? startReviewSession : startNewSession;
-  let failed = false;
   run(goal).catch(error => {
-    failed = true;
     startupWorkflowByGoal.set(startupGoalKey(goal), { stage: 'error', detail: error.message });
     logError(`Cannot start session: ${error.message}`);
   }).finally(() => {
     startingGoals.delete(goal.shoakuId);
-    if (review || failed) runningGoalId = undefined;
     syncShoakuLists(initializeParams.initializationOptions.filePath)
       .catch(error => logWarn(`Cannot sync goals: ${error.message}`));
   });
@@ -423,56 +422,24 @@ function startGoal(goal) {
 
 async function startNextGoal() {
   if (!agentsReady) return;
-  if (runningGoalId && unavailableGoals.has(runningGoalId)) runningGoalId = undefined;
-  if (runningGoalId) {
-    const chat = chatByShoakuId.get(runningGoalId);
-    if (conversationUpdates.busy(runningGoalId) || !canAdvanceGoal(chat, startingGoals.has(runningGoalId))) return;
-    runningGoalId = undefined;
+  // Starting/restoring reserves only this goal. Do not await its agent work:
+  // it emits sync notifications and must not hold up independent worktrees.
+  while (true) {
+    const candidate = await nextQueueGoal(lists, {
+      attached: id => chatByShoakuId.has(id),
+      starting: id => startingGoals.has(id),
+      unavailable: id => unavailableGoals.has(id),
+      failed: goal => startupWorkflowByGoal.get(startupGoalKey(goal))?.stage === 'error',
+      persisted: async id => !!await stat(join(sessionsDir, id, 'meta.json')).catch(() => null)
+    });
+    if (!candidate) return;
+    if (candidate.action === 'start') startGoal(candidate.goal);
+    else restoreGoal(candidate.goal);
   }
-  const candidate = await nextQueueGoal(lists, {
-    attached: id => chatByShoakuId.has(id),
-    unavailable: id => unavailableGoals.has(id),
-    failed: goal => startupWorkflowByGoal.get(startupGoalKey(goal))?.stage === 'error',
-    persisted: async id => !!await stat(join(sessionsDir, id, 'meta.json')).catch(() => null),
-    finished: async id => {
-      const chat = chatByShoakuId.get(id);
-      if (chat) return !conversationUpdates.busy(id) && canAdvanceGoal(chat, startingGoals.has(id));
-      try {
-        const meta = JSON.parse(await readFile(join(sessionsDir, id, 'meta.json'), 'utf8'));
-        if (meta.mode === 'review') {
-          if (!meta.reviewWorkspace) return false;
-          const thread = await sendAppRequest('thread/read', { threadId: meta.navigator.threadId, includeTurns: false });
-          return thread.result.thread.status?.type !== 'active' &&
-            !!await stat(join(meta.reviewWorkspace, '.shoaku/RESULTS.md')).catch(() => null);
-        }
-        const goal = await sendAppRequest('thread/goal/get', { threadId: meta.explorer.threadId });
-        if (goal.result.goal?.status !== 'complete') return false;
-        const thread = await sendAppRequest('thread/read', { threadId: meta.explorer.threadId, includeTurns: false });
-        if (thread.result.thread.status?.type === 'active') return false;
-        const navigator = await sendAppRequest('thread/read', { threadId: meta.navigator.threadId, includeTurns: false });
-        if (navigator.result.thread.status?.type === 'active') return false;
-        return (await inspectExistingCommitReview(thread.result.thread.cwd)).ready;
-      } catch (error) {
-        // Keep the failed session visible, but do not repeatedly inspect it or
-        // let it hold up unrelated goals. An explicit open retries restoration.
-        unavailableGoals.add(id);
-        const goal = findItemByShoakuId(lists, id);
-        if (goal) startupWorkflowByGoal.set(startupGoalKey(goal), { stage: 'error', detail: error.message });
-        syncShoakuLists(initializeParams.initializationOptions.filePath).catch(error => logWarn(error.message));
-        return false;
-      }
-    }
-  });
-  if (!candidate) return;
-  const { goal, action } = candidate;
-  if (action === 'start') { startGoal(goal); return; }
-  runningGoalId = goal.shoakuId;
-  if (action === 'wait' || startingGoals.has(goal.shoakuId) ||
-      startupWorkflowByGoal.get(startupGoalKey(goal))?.stage === 'error') return;
-  restoreGoal(goal);
 }
 
 function restoreGoal(goal) {
+  if (startingGoals.has(goal.shoakuId)) return;
   startingGoals.add(goal.shoakuId);
   // Do not await here: resuming emits sync notifications through this queue.
   resumeSession(goal.shoakuId).then(() => {
@@ -480,7 +447,6 @@ function restoreGoal(goal) {
     startupWorkflowByGoal.delete(startupGoalKey(goal));
   }).catch(error => {
     unavailableGoals.add(goal.shoakuId);
-    if (runningGoalId === goal.shoakuId) runningGoalId = undefined;
     startupWorkflowByGoal.set(startupGoalKey(goal), { stage: 'error', detail: error.message });
   }).finally(() => {
     startingGoals.delete(goal.shoakuId);
@@ -543,7 +509,7 @@ async function generatePrDesign(shoakuId, threadId, workspace, snapshot, goalIte
 }
 
 async function attachReviewSession(shoakuId, threadId, workspace) {
-  activeShoakuId = activeGoalId(runningGoalId, shoakuId);
+  activeShoakuId ||= shoakuId;
   sessionToShoaku.set(threadId, shoakuId);
   shoakuToSession.set(shoakuId, { navigatorThreadId: threadId });
   chatByShoakuId.set(shoakuId, { mode: 'review', temporaryWorkspace: workspace, messages: [],
@@ -569,7 +535,7 @@ async function startNewSession(goalItem) {
   const shoakuId = goalItem.shoakuId;
   const explorerBranch = shoakuId.replace('-', '/');
   await ensureExplorerBranch(workDir, explorerBranch);
-  activeShoakuId = activeGoalId(runningGoalId, shoakuId);
+  activeShoakuId ||= shoakuId;
   chatByShoakuId.set(shoakuId, {
     messages: [],
     status: {
@@ -730,7 +696,7 @@ async function resumeSession(shoakuId) {
   if (!isSessionId(shoakuId)) throw new Error('Invalid session ID: expected shoaku- followed by six alphanumeric characters.');
   const metaData = await readFile(join(sessionsDir, shoakuId, 'meta.json'), { encoding: 'utf8' }).then((content) => JSON.parse(content));
   if (metaData.mode === 'review') {
-    if (shoakuToSession.has(shoakuId)) { activeShoakuId = activeGoalId(runningGoalId, shoakuId); return; }
+    if (shoakuToSession.has(shoakuId)) { activeShoakuId ||= shoakuId; return; }
     const resumedReview = await sendAppRequest('thread/resume', { threadId: metaData.navigator.threadId });
     const goal = findItemByShoakuId(lists, shoakuId);
     if (!metaData.reviewWorkspace && goal) {
@@ -758,7 +724,7 @@ async function resumeSession(shoakuId) {
     throw new Error(`Invalid session metadata for shoakuId ${shoakuId}`);
   }
 
-  activeShoakuId = activeGoalId(runningGoalId, shoakuId);
+  activeShoakuId ||= shoakuId;
   chatByShoakuId.set(shoakuId, {
     messages: [],
     status: {
@@ -918,6 +884,40 @@ async function dispatchExplorerGoal(shoakuId, plansMd, reviewRepair = null, docu
   await syncShoakuLists(initializeParams.initializationOptions.filePath);
 }
 
+async function inspectGoalReview(chat) {
+  try {
+    return await inspectCommitReview(chat.temporaryWorkspace);
+  } catch (error) {
+    return { ready: false, detail: `Cannot verify implementation commits: ${error.message}` };
+  }
+}
+
+// Slow review and session inspection must not hold up Markdown acknowledgement.
+let queueRefreshRunning = false;
+let queueRefreshRequested = false;
+function refreshGoalQueue() {
+  queueRefreshRequested = true;
+  if (queueRefreshRunning) return;
+  queueRefreshRunning = true;
+  (async () => {
+    while (queueRefreshRequested) {
+      queueRefreshRequested = false;
+      await startNextGoal();
+      let changed = false;
+      for (const chat of chatByShoakuId.values()) {
+        if (chat.status.goalStatus !== 'complete' || !chat.temporaryWorkspace) continue;
+        const review = await inspectGoalReview(chat);
+        if (JSON.stringify(chat.status.review) !== JSON.stringify(review)) {
+          chat.status.review = review;
+          changed = true;
+        }
+      }
+      if (changed) await syncShoakuLists(initializeParams.initializationOptions.filePath);
+    }
+  })().catch(error => logWarn(`Cannot refresh goal queue: ${error.message}`))
+    .finally(() => { queueRefreshRunning = false; });
+}
+
 let syncQueue = Promise.resolve();
 function syncShoakuLists(filePath) {
   const result = syncQueue.then(() => syncShoakuListsNow(filePath));
@@ -947,18 +947,8 @@ async function syncShoakuListsNow(filePath) {
 
   for (const goal of lists) {
     const chat = chatByShoakuId.get(goal.shoakuId);
-    if (chat?.status.goalStatus === 'complete' && chat.temporaryWorkspace) {
-      try {
-        chat.status.review = await inspectCommitReview(chat.temporaryWorkspace);
-      } catch (error) {
-        chat.status.review = { ready: false, detail: `Cannot verify implementation commits: ${error.message}` };
-      }
-    }
     goal.mode = chat?.mode;
     goal.workflow = startupWorkflowByGoal.get(startupGoalKey(goal)) || workflowStatus(chatByShoakuId.get(goal.shoakuId)?.status, !!chat || !!(goal.shoakuId && await stat(join(sessionsDir, goal.shoakuId, 'meta.json')).catch(() => null)));
-    if (goal.workflow.stage === 'notStarted' && runningGoalId && runningGoalId !== goal.shoakuId) {
-      goal.workflow = { stage: 'notStarted', detail: 'Waiting for the current goal to finish.' };
-    }
     if (chat?.mode === 'review' && ['planning', 'idle'].includes(goal.workflow.stage)) {
       goal.workflow = { stage: chat.status.navigator === 'active' ? 'planning' : 'idle',
         detail: chat.status.review?.detail || (chat.status.navigator === 'active' ? 'Preparing the PR design document and code guide.' : 'PR review is ready to explore.') };
@@ -978,7 +968,7 @@ async function syncShoakuListsNow(filePath) {
       lists
     })
   );
-  await startNextGoal();
+  refreshGoalQueue();
   return lists;
 }
 
