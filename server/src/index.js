@@ -591,11 +591,11 @@ async function startNewSession(goalItem) {
   await Promise.all([
     sendAppRequest('thread/name/set', {
       threadId: navigatorThreadId,
-      name: `[${shoakuId}] ${goalItem.content}`
+      name: `[${shoakuId.replace('shoaku-', 'shoaku-n')}] ${goalItem.content}`
     }),
     sendAppRequest('thread/name/set', {
       threadId: explorerThreadId,
-      name: `[${shoakuId}] ${goalItem.content}`
+      name: `[${shoakuId.replace('shoaku-', 'shoaku-e')}] ${goalItem.content}`
     }),
   ]);
 
