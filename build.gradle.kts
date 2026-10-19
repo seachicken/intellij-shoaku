@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.7.4"
+version = "0.7.5"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -56,19 +56,11 @@ intellijPlatform {
         changeNotes = """
             <h2>Improvements</h2>
             <ul>
-                <li>Run independent goals without waiting for other sessions</li>
-                <li>Keep plan objectives and implementation steps aligned, and resume Explorer when plans change</li>
-                <li>Consolidate implementation corrections into the relevant commits</li>
-                <li>Simplify outcome review with a commit tree and linked diff navigation</li>
-                <li>Move Ask Codex into the plan section</li>
-                <li>Distinguish Navigator and Explorer in Codex session titles</li>
-                <li>Reduce internal chat output by submitting plans through a dedicated tool in new sessions</li>
-                <li>Have Navigator supply external context so Explorer can implement and verify offline</li>
+                <li>Simplify Navigator session titles and leave Explorer session titles unchanged</li>
             </ul>
             <h2>Bug Fixes</h2>
             <ul>
-                <li>Keep Explorer goal objectives within the API length limit while preserving complete plans in files</li>
-                <li>Allow failed plan handoffs to be retried without changing the plan</li>
+                <li>Correctly display agent errors in activity and summary status indicators</li>
             </ul>
         """.trimIndent()
     }
