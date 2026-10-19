@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { planTool, runPlanTool } from './plan-tool.js';
+import { internalNavigatorInput, userConversationText } from './navigator-input.js';
 import { explorerObjective } from './explorer-objective.js';
 
 import { homedir } from 'node:os';
@@ -17,7 +18,8 @@ import { renderSummary, renderSummaryDiff } from './diff-snippet.js';
 import parser from './parser.js';
 import { parsePlanResponse } from './plan-response.js';
 import { isSessionId, reserveSessionId } from './session-id.js';
-import { createManagedWorktree } from './managed-worktree.js';
+import { createManagedWorktree, isGitWorkspace } from './managed-worktree.js';
+import { recordWorkspaceRepositories, inspectWorkspaceReport } from './workspace-report.js';
 import { ensureExplorerBranch, watchGitRequests } from './git-bridge.js';
 import { workflowStatus } from './workflow-status.js';
 import { recordReviewBase, inspectCommitReview } from './commit-review.js';
@@ -64,13 +66,17 @@ const navigatorPlanningInstructions = [
   'When revising the checklist, preserve unaffected tasks and retain completion only for unchanged tasks whose work still satisfies the updated plan. Reopen tasks when changed requirements invalidate their previous completion. Explorer will receive the entire updated plan and adapt its existing implementation rather than start over.'
 ].join('\n');
 
-const explorerInstructions = [
+const commonExplorerInstructions = [
   'Autonomously implement the user\'s TODOs.',
   '- Work offline inside the sandbox. Navigator owns external research and provides the necessary source excerpts, URLs, and findings in .shoaku/PLANS.md. Do not fetch issues, PRs, documentation, dependencies, or remote repositories, and do not retry unavailable network access.',
   '- Use local source, cached dependencies, fixtures, and mocks for implementation and verification. If an online check is unavailable, record it as not run in RESULTS.md and continue all independent work; never claim that it passed. Missing optional online verification alone must not block completion of the offline plan. If missing external facts are essential for correctness, report the exact information Navigator must supply in .shoaku/goals.md outside checklist rows; preserve completed work and do not guess, weaken acceptance criteria, or repeatedly retry the same lookup.',
   '- Write user-facing responses and design/review documents in the same language as .shoaku/PLANS.md.',
   '- Read .shoaku/PLANS.md, authored by Navigator, as the authoritative implementation plan. Maintain .shoaku/goals.md as your progress checklist, preserving every plan task\'s exact text, order, and nesting; change only its completion checkbox. Keep additional investigation notes outside checklist rows. Never rename, replace, or add plan tasks in goals.md. If the plan changes, synchronize the checklist to the current plan and retain completion only for matching tasks. Do not edit PLANS.md.',
   '- Implement, integrate, and verify the complete goal autonomously; human checkboxes are requirements, not prerequisites for starting work.',
+].join('\n');
+
+const explorerInstructions = [
+  commonExplorerInstructions,
   '- Source edits happen in this session’s linked worktree. Shoaku manages Git commits on your dedicated branch through a host bridge. Do not run git add, commit, reset, rebase, or branch mutations yourself. Request each coherent commit by atomically writing .shoaku/git-request.json with {id: a unique alphanumeric identifier, action: commit, files: an array of explicit relative source-file paths, message: the commit explanation}. Use valid JSON with quoted strings. Poll .shoaku/git-response.json until its id matches and status is complete or failed; use the returned full hash for commit documents. Never treat a pending request as a commit. If failed, preserve the work and report the error. Do not modify git-response.json.',
   '- Organize implementation as coherent commits via this bridge. The server attaches the managed checkout to its dedicated shoaku branch. Choose a logical sequence and keep each request independently understandable; never rewrite other branches or push. When plan changes require correcting existing implementation, fold corrections into the relevant session commits instead of leaving a trail of corrective commits. Request this through git-request.json with {id: a new unique identifier, action: "fixup", target: the full hash of the relevant commit after base-revision, files: explicit changed source paths, message: an explanation of the correction}. The host bridge commits the correction and runs autosquash rebase only after the session base. Commit unrelated changes separately first. Never run rebase yourself. If the bridge reports failure, inspect the preserved work and report the blocker; do not blindly retry. Re-read the actual commit history after every fixup because target and later hashes change. Regenerate Markdown explanations and design-to-code maps for every changed final hash and update RESULTS.md to link only to the final commits; obsolete documents must not be presented as current.',
   '- Write .shoaku/RESULTS.md as a concise, visual design document: outcome, architecture, design decisions, alternatives, verification evidence, and remaining limitations. Include an ordered commit reading guide linking to commits/<full-sha>.md.',
@@ -83,6 +89,14 @@ const explorerInstructions = [
   '- Treat commit creation, cleanup, and documentation as required acceptance criteria. Do not mark the goal complete while implementation changes are uncommitted, commit explanations or valid design-to-code maps are missing, or RESULTS.md does not link to every final commit. Read the starting revision from .shoaku/base-revision; never edit it or the server-generated COMMITS.md. A genuine no-change goal may finish without commits, but explain why in RESULTS.md.',
   '- Preserve the workspace and report blockers when verification or history cleanup fails.',
 ].join('\n');
+
+const directExplorerInstructions = [
+  commonExplorerInstructions,
+  '- This session edits the original workspace directly, which may contain multiple repositories. Changes are shared with the user and other sessions. Preserve existing work. Work only within the requested goal.',
+  '- Automatic Git commits and the Git bridge are unavailable in this workspace. Do not create git-request.json, run Git mutations, initialize a repository, or require commits or commit review maps for completion.',
+  '- Write .shoaku/RESULTS.md with the outcome, changed files grouped by repository, design decisions, actual verification results, and remaining limitations. Completion requires the implementation and this report. The server appends observed commits and uncommitted changes for immediate child repositories since session start; preserve .shoaku/repositories.json and do not write the section starting <!-- shoaku:repository-commits -->.'
+].join('\n');
+const instructionsForWorkspace = kind => kind === 'direct' ? directExplorerInstructions : explorerInstructions;
 
 let appClient;
 let config;
@@ -257,8 +271,8 @@ function connectToAppServer() {
           case 'item/completed':
             if (message.params.item.type === 'userMessage') {
               const shoakuId = sessionToShoaku.get(message.params.threadId);
-              const text = message.params.item.content?.filter(part => part.type === 'text').map(part => part.text).join('\n');
-              if (shoakuId && shoakuToSession.get(shoakuId)?.navigatorThreadId === message.params.threadId && text && !text.startsWith('[Shoaku:')) {
+              const text = userConversationText(message.params.item);
+              if (shoakuId && shoakuToSession.get(shoakuId)?.navigatorThreadId === message.params.threadId && text) {
                 delete chatByShoakuId.get(shoakuId).status.requiredInput;
                 conversationUpdates.enqueue(shoakuId, `User conversation update: ${text}`, message.params.turnId);
                 await syncShoakuLists(initializeParams.initializationOptions.filePath);
@@ -376,9 +390,9 @@ async function refreshGoal(shoakuId, input) {
     input: [
       {
         type: 'text',
-        text: chat.planTools
+        text: internalNavigatorInput(chat.planTools
           ? 'Update the plan from the latest context using shoaku_save_plan, then give a brief summary.'
-          : 'Update the plan from the latest context; return plansMd and requiredInput as JSON.'
+          : 'Update the plan from the latest context; return plansMd and requiredInput as JSON.')
       }
     ],
     ...(chat.planTools ? {} : { outputSchema: {
@@ -523,7 +537,7 @@ async function startReviewSession(goalItem) {
 
 async function generatePrDesign(shoakuId, threadId, workspace, snapshot, goalItem, update = '') {
   await startTurn({ threadId, sandboxPolicy: { type: 'readOnly', networkAccess: true },
-    input: [{ type: 'text', text: [
+    input: [{ type: 'text', text: internalNavigatorInput([
       update,
       'Use the latest completed conversation to update the existing design documents. Preserve unchanged explanations and code maps; correct them when the review focus or understanding changes. This is explanation-only: do not implement source changes.',
       `Review this goal in its language: ${JSON.stringify(goalItem)}`,
@@ -532,7 +546,7 @@ async function generatePrDesign(shoakuId, threadId, workspace, snapshot, goalIte
       'Return reviewMapJson using the schema below. The commit field is the pinned PR head. Before anchors refer to the comparison base; after anchors refer to the head. Verify every line with git show. Cover every file from git diff --name-only --no-renames base head, or exclude it with a reason. Step titles must appear in designMd. Distinguish AI inference, author-reported checks and independently verified evidence. Never claim checks you did not run.',
       'Schema: {"schemaVersion":1,"commit":"head sha","problem":"problem","before":"before","after":"after","steps":[{"id":"topic","title":"decision","why":"rationale and tradeoffs","change":"behavior and review concerns","verification":"evidence with provenance or unverified","anchors":[{"path":"changed path","side":"after","startLine":1,"endLine":2,"label":"responsibility"}],"links":[]}],"excludedFiles":[{"path":"changed path","reason":"reason"}]}. Use 1–24 steps, 1–20 anchors each and concise nonempty fields. Links use {to: step id, label: relationship}.',
       'If the PR changes no files, explain this in the overview and design; use no steps and no excluded files.'
-    ].join('\n') }],
+    ].join('\n')) }],
     outputSchema: { type: 'object', properties: {
       overviewMd: { type: 'string' }, designMd: { type: 'string' }, reviewMapJson: { type: 'string' }
     }, required: ['overviewMd', 'designMd', 'reviewMapJson'], additionalProperties: false }
@@ -564,11 +578,15 @@ async function attachReviewSession(shoakuId, threadId, workspace) {
 
 async function startNewSession(goalItem) {
   const startupKey = startupGoalKey(goalItem);
-  startupWorkflowByGoal.set(startupKey, { stage: 'planning', detail: 'Codex is preparing a linked worktree and checking the checkout.' });
+  startupWorkflowByGoal.set(startupKey, { stage: 'planning', detail: 'Codex is preparing the implementation workspace.' });
   await syncShoakuLists(initializeParams.initializationOptions.filePath);
   let explorerNativeThreadId;
+  let workspaceKind;
   try {
-    explorerNativeThreadId = await createManagedWorktree(initializeParams.rootPath);
+    workspaceKind = await isGitWorkspace(initializeParams.rootPath) ? 'codex-managed' : 'direct';
+    explorerNativeThreadId = workspaceKind === 'direct'
+      ? (await sendAppRequest('thread/start', { cwd: initializeParams.rootPath, approvalPolicy: 'never', sandbox: 'workspace-write' })).result.thread.id
+      : await createManagedWorktree(initializeParams.rootPath);
   } catch (error) {
     startupWorkflowByGoal.set(startupKey, { stage: 'error', detail: error.message });
     await syncShoakuLists(initializeParams.initializationOptions.filePath);
@@ -578,7 +596,7 @@ async function startNewSession(goalItem) {
   const workDir = nativeExplorer.result.thread.cwd;
   const shoakuId = goalItem.shoakuId;
   const explorerBranch = shoakuId.replace('-', '/');
-  await ensureExplorerBranch(workDir, explorerBranch);
+  if (workspaceKind !== 'direct') await ensureExplorerBranch(workDir, explorerBranch);
   activeShoakuId ||= shoakuId;
   chatByShoakuId.set(shoakuId, {
     messages: [],
@@ -591,6 +609,7 @@ async function startNewSession(goalItem) {
       navigatorTokens: 0,
       explorerTokens: 0
     },
+    workspaceKind,
     temporaryWorkspace: workDir,
     planTools: true
   });
@@ -604,14 +623,15 @@ async function startNewSession(goalItem) {
       dynamicTools: [planTool]
     }),
     (async () => {
-      logInfo(`Using Codex-managed linked worktree: ${workDir}`);
+      logInfo(`Using ${workspaceKind} implementation workspace: ${workDir}`);
 
       const data = [
         `# ${goalItem.content}`,
       ].join('\n');
       const shoakuDir = join(workDir, '.shoaku');
       await mkdir(shoakuDir, { recursive: true });
-      await recordReviewBase(workDir);
+      if (workspaceKind === 'direct') await recordWorkspaceRepositories(workDir);
+      else await recordReviewBase(workDir);
       const goalsPath = join(shoakuDir, 'goals.md');
       await writeFile(goalsPath, data, { flag: 'wx' }).catch((e) => {
         if (e.code !== 'EEXIST') {
@@ -680,7 +700,7 @@ async function startNewSession(goalItem) {
           content: [
             {
               type: 'input_text',
-              text: explorerInstructions
+              text: instructionsForWorkspace(workspaceKind)
             }
           ]
         }
@@ -688,7 +708,7 @@ async function startNewSession(goalItem) {
     })
   ]);
 
-  startGitBridge(shoakuId, workDir, explorerBranch);
+  if (workspaceKind !== 'direct') startGitBridge(shoakuId, workDir, explorerBranch);
 
   const childItem = findActiveItem(goalItem?.children ?? []);
 
@@ -701,7 +721,7 @@ async function startNewSession(goalItem) {
     },
     explorer: {
       threadId: explorerThreadId,
-      workspaceKind: 'codex-managed',
+      workspaceKind,
       workspace: workDir,
       branch: explorerBranch
     },
@@ -721,10 +741,10 @@ async function startNewSession(goalItem) {
     input: [
       {
         type: 'text',
-        text: [
+        text: internalNavigatorInput([
           `My goal is "${goalItem?.content}", and in the short term, I want to solve "${childItem?.content}".`,
           'Please return all subsequent responses in the language of the list.'
-        ].join('\n')
+        ].join('\n'))
       }
     ]}, {
       onItemCompleted: async (id, params) => {
@@ -788,7 +808,17 @@ async function resumeSession(shoakuId) {
 
   const explorerThread = await sendAppRequest('thread/read', { threadId: metaData.explorer.threadId, includeTurns: false });
   const explorerWorkspace = explorerThread.result.thread.cwd;
-  await recordReviewBase(explorerWorkspace, { existing: true });
+  const workspaceKind = metaData.explorer.workspaceKind || 'codex-managed';
+  chatByShoakuId.get(shoakuId).workspaceKind = workspaceKind;
+  if (workspaceKind !== 'direct') await recordReviewBase(explorerWorkspace, { existing: true });
+  else {
+    // Sessions created before repository summaries have no historical baseline.
+    // Start observation now rather than attributing all existing history to them.
+    await readFile(join(explorerWorkspace, '.shoaku/repositories.json'), 'utf8').catch(async error => {
+      if (error.code !== 'ENOENT') throw error;
+      await recordWorkspaceRepositories(explorerWorkspace);
+    });
+  }
 
   const [navigatorRes, explorerRes] = await Promise.all([
     sendAppRequest('thread/resume', {
@@ -824,12 +854,14 @@ async function resumeSession(shoakuId) {
     await writeFile(join(sessionsDir, shoakuId, 'meta.json'), JSON.stringify(metaData, null, 2));
   }
   const explorerBranch = metaData.explorer.branch || shoakuId.replace('-', '/');
-  await ensureExplorerBranch(chat.temporaryWorkspace, explorerBranch);
-  startGitBridge(shoakuId, chat.temporaryWorkspace, explorerBranch);
+  if (workspaceKind !== 'direct') {
+    await ensureExplorerBranch(chat.temporaryWorkspace, explorerBranch);
+    startGitBridge(shoakuId, chat.temporaryWorkspace, explorerBranch);
+  }
 
   await sendAppRequest('thread/inject_items', {
     threadId: explorerThreadId,
-    items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: explorerInstructions }] }]
+    items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: instructionsForWorkspace(workspaceKind) }] }]
   });
 
   const goalsPath = join(chat.temporaryWorkspace, '.shoaku', 'goals.md');
@@ -912,7 +944,7 @@ async function dispatchExplorerGoal(shoakuId, plansMd, reviewRepair = null, docu
     threadId: shoakuToSession.get(shoakuId).explorerThreadId,
     // Updating the objective alone can preserve a completed goal's status.
     status: 'active',
-    objective: explorerObjective({ documentationOnly, reviewRepair: !!reviewRepair }),
+    objective: explorerObjective({ direct: chat.workspaceKind === 'direct', documentationOnly, reviewRepair: !!reviewRepair }),
     tokenBudget
   });
   chat.explorerDispatchPending = false;
@@ -922,9 +954,12 @@ async function dispatchExplorerGoal(shoakuId, plansMd, reviewRepair = null, docu
 
 async function inspectGoalReview(chat) {
   try {
+    if (chat.workspaceKind === 'direct') {
+      return await inspectWorkspaceReport(chat.temporaryWorkspace);
+    }
     return await inspectCommitReview(chat.temporaryWorkspace);
   } catch (error) {
-    return { ready: false, detail: `Cannot verify implementation commits: ${error.message}` };
+    return { ready: false, detail: `Cannot verify ${chat.workspaceKind === 'direct' ? 'implementation report' : 'implementation commits'}: ${error.message}` };
   }
 }
 

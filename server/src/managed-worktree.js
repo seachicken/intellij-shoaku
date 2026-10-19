@@ -1,9 +1,11 @@
 import childProcess from 'node:child_process';
+import { lstat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 
 export function runWorktreeCommand(program, args, options) {
   return new Promise((resolve, reject) => {
     const child = childProcess.execFile(program, args, options, (error, stdout, stderr) => {
-      if (error) reject(error);
+      if (error) reject(Object.assign(error, { stdout, stderr }));
       else resolve({ stdout, stderr });
     });
     // Codex appends piped stdin to its prompt; close it so initialization
@@ -38,4 +40,29 @@ export async function createManagedWorktree(sourcePath, run = runWorktreeCommand
   const args = ['--enable', 'worktrees', '--ask-for-approval', 'never', '--sandbox', 'workspace-write', 'exec', '--worktree', '--json', '--cd', sourcePath, worktreeBootstrapPrompt];
   const { stdout } = await run('codex', args, { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
   return parseWorktreeBootstrap(stdout);
+}
+
+// Only an explicit non-repository result selects direct execution. Permission,
+// missing executable, and corrupt repository errors must remain visible.
+export async function isGitWorkspace(sourcePath, run = runWorktreeCommand) {
+  try {
+    await run('git', ['-C', sourcePath, 'rev-parse', '--show-toplevel'], {
+      timeout: 30_000, env: { ...process.env, LC_ALL: 'C' }
+    });
+    return true;
+  } catch (error) {
+    if (error.code === 128 && /not a git repository/i.test(error.stderr || '')) {
+      // Corrupt Git metadata can produce the same error as a plain directory.
+      // Never silently switch such a checkout to direct editing.
+      for (let directory = resolve(sourcePath); ; directory = dirname(directory)) {
+        const metadata = await lstat(join(directory, '.git')).catch(statError => {
+          if (statError.code !== 'ENOENT') throw statError;
+          return null;
+        });
+        if (metadata) throw error;
+        if (dirname(directory) === directory) return false;
+      }
+    }
+    throw error;
+  }
 }

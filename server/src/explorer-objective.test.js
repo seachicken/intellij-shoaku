@@ -13,3 +13,11 @@ test('all goal modes stay within the API limit and refer to the complete persist
     }
   }
 });
+
+test('direct workspace completion requires a report without Git bridge acceptance', () => {
+  const objective = explorerObjective({ direct: true });
+  assert.ok(objective.includes('original workspace'));
+  assert.ok(objective.includes('.shoaku/RESULTS.md'));
+  assert.ok(!objective.includes('.shoaku/COMMITS.md'));
+  assert.ok(!objective.includes('final hashes'));
+});

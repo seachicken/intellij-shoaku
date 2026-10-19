@@ -49,6 +49,9 @@ internal class GitCommitReviewReader(private val workspace: Path) {
             validateHash(head)
             return listOf(ReviewCommit(head, pr.get("title").asString))
         }
+        // Direct multi-repository workspaces show commit summaries in RESULTS.md.
+        // They have no root Git history or per-commit diff navigation.
+        if (Files.isRegularFile(workspace.resolve(".shoaku/repositories.json"))) return emptyList()
         val base = Files.readString(workspace.resolve(".shoaku/base-revision")).trim()
         validateHash(base)
         git("merge-base", "--is-ancestor", base, "HEAD")

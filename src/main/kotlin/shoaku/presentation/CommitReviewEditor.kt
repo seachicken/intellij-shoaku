@@ -279,10 +279,13 @@ private class CommitReviewEditor(private val project: Project, private val revie
                 selectedDetails = null
                 selectedFile = null
                 guide = null
-                guideIssue = "No changes ready to review yet. Updates appear automatically."
+                val emptyMessage = if (Files.isRegularFile(reviewFile.workspace.resolve(".shoaku/repositories.json")))
+                    "See Design overview for repository commit summaries and uncommitted changes."
+                else "No changes ready to review yet. Updates appear automatically."
+                guideIssue = emptyMessage
                 renderGuide()
-                status.text = guideIssue
-                diff.setRequest(MessageDiffRequest("No changes ready to review yet."))
+                status.text = emptyMessage
+                diff.setRequest(MessageDiffRequest(emptyMessage))
             } else loadCommit(previousFile, previousStep)
         }
     }

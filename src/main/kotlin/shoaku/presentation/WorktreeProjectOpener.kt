@@ -23,7 +23,6 @@ internal object WorktreeProjectOpener {
     private suspend fun workspacePath(workspace: String): Path = withContext(Dispatchers.IO) {
         val candidate = Path.of(workspace)
         require(Files.isDirectory(candidate)) { "The worktree directory is no longer available: $workspace" }
-        require(Files.exists(candidate.resolve(".git"))) { "The worktree has no Git metadata: $workspace" }
         candidate.toRealPath()
     }
 
