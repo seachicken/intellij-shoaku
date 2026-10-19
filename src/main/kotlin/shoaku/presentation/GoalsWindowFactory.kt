@@ -4487,7 +4487,7 @@ private fun String?.toAgentStatusState(): AgentStatusState {
     return when (normalized) {
         "active" ->
             AgentStatusState("Working", AgentStatusTone.Running, true)
-        "systemError" ->
+        "systemerror" ->
             AgentStatusState("Error", AgentStatusTone.Error, false)
         else ->
             AgentStatusState("", AgentStatusTone.Hidden, false)
