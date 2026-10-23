@@ -46,7 +46,7 @@ export async function inspectWorkspaceReport(workspace) {
   const report = previous.split(marker)[0].trimEnd();
   if (!report.trim()) return { ready: false, detail: 'Write the implementation report in .shoaku/RESULTS.md.' };
   const { repositories, capturedAt } = JSON.parse(await readFile(snapshotPath(workspace), 'utf8'));
-  const sections = [marker, '', '## Repository commits', '',
+  const sections = ['# Repository commits', '',
     `Observed since the recorded baseline (${capturedAt}); commits may include work by other sessions or people. Automatic commits are disabled.`, ''];
   if (!repositories.length) sections.push('No immediate child Git repositories were found at session start.', '');
   for (const repository of repositories) {
@@ -79,7 +79,11 @@ export async function inspectWorkspaceReport(workspace) {
       sections.push('Could not inspect this repository. Its history may have changed or it may be unavailable.', '', code(error.message), '');
     }
   }
-  const next = `${report}\n\n${sections.join('\n')}`;
+  const detailsPath = join(workspace, '.shoaku', 'REPOSITORIES.md');
+  const details = sections.join('\n');
+  const previousDetails = await readFile(detailsPath, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+  if (details !== previousDetails) await writeFile(detailsPath, details);
+  const next = `${report}\n\n${marker}\n\n[Repository details](REPOSITORIES.md)\n`;
   if (next !== previous) await writeFile(reportPath, next);
   return { ready: true, detail: 'Implementation report and repository commit summaries are ready.' };
 }

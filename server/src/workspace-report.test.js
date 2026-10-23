@@ -27,7 +27,7 @@ async function commit(directory, message) {
   return git(directory, 'rev-parse', 'HEAD');
 }
 
-test('one report includes only post-baseline commits by repository, with uncommitted work separate', async t => {
+test('overview links to repository details without including commit logs', async t => {
   const workspace = await fixture(t);
   const api = await repository(workspace, 'api');
   const web = await repository(workspace, 'web app');
@@ -44,15 +44,16 @@ test('one report includes only post-baseline commits by repository, with uncommi
   await writeFile(join(web, 'source.txt'), 'new UI');
   const webHash = await commit(web, 'Render UI');
   await writeFile(join(web, 'source.txt'), 'unfinished');
-  await writeFile(join(workspace, '.shoaku/RESULTS.md'), '# Outcome\n\nUser-authored design.');
+  await writeFile(join(workspace, '.shoaku/RESULTS.md'), '# Outcome\n\nUser-authored design.\n\n<!-- shoaku:repository-commits -->\n\n## Repository commits\nOld inline logs');
   assert.equal((await inspectWorkspaceReport(workspace)).ready, true);
   const path = join(workspace, '.shoaku/RESULTS.md');
   const report = await readFile(path, 'utf8');
-  assert.ok(report.startsWith('# Outcome\n\nUser-authored design.'));
-  for (const value of ['api', 'web app', 'linked', apiHash, webHash, 'Support API', 'Keep compatibility.', 'source.txt', 'Uncommitted changes', 'No commits since start.']) assert.ok(report.includes(value), value);
-  assert.ok(!report.includes(old));
-  assert.ok(!report.includes('Old implementation'));
-  assert.ok(!report.includes('unfinished'));
+  assert.equal(report, '# Outcome\n\nUser-authored design.\n\n<!-- shoaku:repository-commits -->\n\n[Repository details](REPOSITORIES.md)\n');
+  const details = await readFile(join(workspace, '.shoaku/REPOSITORIES.md'), 'utf8');
+  for (const value of ['api', 'web app', 'linked', apiHash, webHash, 'Support API', 'Keep compatibility.', 'source.txt', 'Uncommitted changes', 'No commits since start.']) assert.ok(details.includes(value), value);
+  assert.ok(!details.includes(old));
+  assert.ok(!details.includes('Old implementation'));
+  assert.ok(!details.includes('unfinished'));
   assert.equal(await git(web, 'rev-parse', 'HEAD'), webHash); // inspection never commits
   await inspectWorkspaceReport(workspace);
   assert.equal(await readFile(path, 'utf8'), report); // repeated refreshes do not duplicate sections
@@ -70,9 +71,10 @@ test('removed repositories remain visible without hiding other repositories or a
   await writeFile(path, '# Design');
   await inspectWorkspaceReport(workspace);
   const report = await readFile(path, 'utf8');
-  assert.ok(report.includes('Could not inspect this repository'));
-  assert.ok(report.includes('remaining'));
-  assert.ok(report.includes('No commits since start.'));
+  const details = await readFile(join(workspace, '.shoaku/REPOSITORIES.md'), 'utf8');
+  assert.ok(details.includes('Could not inspect this repository'));
+  assert.ok(details.includes('remaining'));
+  assert.ok(details.includes('No commits since start.'));
   await writeFile(path, report.slice(report.indexOf('<!-- shoaku:repository-commits -->')));
   assert.equal((await inspectWorkspaceReport(workspace)).ready, false);
 });

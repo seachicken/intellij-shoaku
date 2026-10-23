@@ -34,6 +34,16 @@ test('design-to-code maps use actual commit lines, account for files, and reject
     };
     const inspect = async value => { await writeFile(mapPath, JSON.stringify(value)); return inspectReviewMap(root, { hash }, git); };
     assert.equal((await inspect(map)).steps.length, 2);
+    const prose = structuredClone(map);
+    prose.steps[1].intent = 'Help the reader understand the new behavior';
+    prose.steps[1].anchors[0].label = 'Sentence introducing the new behavior';
+    const inspectedProse = await inspect(prose);
+    assert.equal(inspectedProse.steps[1].intent, prose.steps[1].intent);
+    assert.deepEqual(inspectedProse.steps[1].anchors, prose.steps[1].anchors);
+    for (const intent of ['', '   ', null, 42, 'x'.repeat(4001)]) {
+      const invalidIntent = structuredClone(prose); invalidIntent.steps[1].intent = intent;
+      await assert.rejects(inspect(invalidIntent), /intent/);
+    }
     await writeFile(join(root, 'new.txt'), 'workspace now has\nmany\nlines\n');
     const wrongLine = structuredClone(map); wrongLine.steps[1].anchors[0].endLine = 3;
     await assert.rejects(inspect(wrongLine), /does not exist/);
@@ -46,7 +56,7 @@ test('design-to-code maps use actual commit lines, account for files, and reject
     const edge = structuredClone(map); edge.steps[0].links[0].to = 'imaginary';
     await assert.rejects(inspect(edge), /unknown step/);
     const invalidPath = structuredClone(map); invalidPath.steps[1].anchors[0].path = '../outside.txt';
-    await assert.rejects(inspect(invalidPath), /invalid code location/);
+    await assert.rejects(inspect(invalidPath), /invalid text or code location/);
     assert.equal((await inspect(map)).steps.length, 2);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

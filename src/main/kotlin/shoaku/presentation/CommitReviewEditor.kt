@@ -93,7 +93,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
     }
     private val guidePanel = JBPanel<JBPanel<*>>(BorderLayout())
     private val stepPicker = JComboBox<GuideStep>()
-    private val layoutPicker = JComboBox(arrayOf("Auto layout", "Side by side", "Below code"))
+    private val layoutPicker = JComboBox(arrayOf("Auto layout", "Side by side", "Below content"))
     private val split = OnePixelSplitter(true, 0.65f)
     private var stacked = true
     private var guide: ReviewGuide? = null
@@ -134,7 +134,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
         }
         stepPicker.name = "shoaku.commitReview.steps"
         layoutPicker.name = "shoaku.commitReview.layout"
-        layoutPicker.toolTipText = "Auto layout places the explanation below code when the editor is narrow. Drag the divider to resize."
+        layoutPicker.toolTipText = "Auto layout places the explanation below content when the editor is narrow. Drag the divider to resize."
         stepPicker.alignmentX = 0f
         guidePanel.name = "shoaku.commitReview.guide"
         val controls = JBPanel<JBPanel<*>>(BorderLayout(8, 4))
@@ -153,7 +153,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
         }, BorderLayout.CENTER)
         root.add(JTabbedPane().apply {
             name = "shoaku.outcome.sections"
-            addTab("Design overview", overview)
+            addTab("Overview", overview)
             addTab("Changes", changes)
         }, BorderLayout.CENTER)
         layoutPicker.addActionListener { updateLayout() }
@@ -280,7 +280,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
                 selectedFile = null
                 guide = null
                 val emptyMessage = if (Files.isRegularFile(reviewFile.workspace.resolve(".shoaku/repositories.json")))
-                    "See Design overview for repository commit summaries and uncommitted changes."
+                    "See Overview for the outcome and a link to repository details."
                 else "No changes ready to review yet. Updates appear automatically."
                 guideIssue = emptyMessage
                 renderGuide()
@@ -439,26 +439,29 @@ private class CommitReviewEditor(private val project: Project, private val revie
         }
         val map = guide
         if (map == null) {
-            paragraph("Correspondence not available", guideIssue ?: "No design-to-code map is available.")
+            paragraph("Correspondence not available", guideIssue ?: "No intent-to-content map is available.")
         } else {
             paragraph("Problem", map.problem)
             paragraph("Before → After", "${map.before}\n→ ${map.after}")
             val covered = map.steps.flatMap { it.anchors }.map { it.path }.distinct().size
-            paragraph("Code correspondence", "$covered of ${selectedDetails?.files?.size ?: 0} changed files mapped. ${map.excluded.size} explicitly excluded.")
-            body.add(JBLabel("Design flow — select a responsibility").apply { alignmentX = 0f })
-            body.add(ReviewFlowDiagram(map.steps) { selectStep(it, true) }.apply {
-                selectedId = (stepPicker.selectedItem as? GuideStep)?.id
-                alignmentX = 0f
-            })
+            paragraph("Content correspondence", "$covered of ${selectedDetails?.files?.size ?: 0} changed files mapped. ${map.excluded.size} explicitly excluded.")
+            if (map.steps.size > 1 && map.steps.any { step -> step.links.any { it.to != step.id } }) {
+                body.add(JBLabel("Review flow — select a passage or responsibility").apply { alignmentX = 0f })
+                body.add(ReviewFlowDiagram(map.steps) { selectStep(it, true) }.apply {
+                    selectedId = (stepPicker.selectedItem as? GuideStep)?.id
+                    alignmentX = 0f
+                })
+            }
             body.add(stepPicker)
             if (unmappedFile != null) {
-                paragraph("No mapped design step for $unmappedFile", map.excluded.firstOrNull { it.path == unmappedFile }?.reason ?: "This file has no code correspondence.")
+                paragraph("No mapped design step for $unmappedFile", map.excluded.firstOrNull { it.path == unmappedFile }?.reason ?: "This file has no mapped explanation.")
             } else {
                 val step = stepPicker.selectedItem as? GuideStep
                 if (step != null) {
+                    step.intent?.let { paragraph("Intent — what this communicates or achieves", it) }
                     paragraph("Why this choice?", step.why)
-                    paragraph("Implementation", step.change)
-                    body.add(JBLabel("Code — select a location to highlight it").apply { alignmentX = 0f })
+                    paragraph("What changed", step.change)
+                    body.add(JBLabel("Content — select a location to highlight it").apply { alignmentX = 0f })
                     step.anchors.forEach { anchor ->
                         paragraph("${anchor.side} · ${anchor.startLine}–${anchor.endLine}", anchor.path)
                         body.add(JButton(anchor.label).apply {
@@ -478,7 +481,7 @@ private class CommitReviewEditor(private val project: Project, private val revie
                     paragraph(if (reviewFile.isPrReview) "Verification — check evidence and provenance" else "Verification — reported by the author", step.verification)
                 }
             }
-            body.add(JBLabel("Selecting mapped code updates this explanation.").apply { alignmentX = 0f })
+            body.add(JBLabel("Selecting mapped text or code updates this explanation.").apply { alignmentX = 0f })
         }
         val scroll = JBScrollPane(body)
         guidePanel.add(scroll, BorderLayout.CENTER)

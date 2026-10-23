@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import childProcess from 'node:child_process';
 import { ensureExplorerBranch, processGitRequest, validateCommitRequest } from './git-bridge.js';
+import { recordReviewBase } from './commit-review.js';
 const execFile = promisify(childProcess.execFile);
 
 test('rejects external paths, directory pathspecs, metadata and arbitrary Git operations', () => {
@@ -24,6 +25,7 @@ test('commits only requested files on the session branch and acknowledges reques
     await writeFile(join(workspace, 'source.txt'), 'before\n'); await git('add', 'source.txt'); await git('commit', '-m', 'Baseline');
     await git('checkout', '--detach'); await ensureExplorerBranch(workspace, 'shoaku/test');
     await mkdir(join(workspace, '.shoaku'));
+    await recordReviewBase(workspace);
     await writeFile(join(workspace, 'source.txt'), 'after\n');
     await writeFile(join(workspace, 'other.txt'), 'unrelated\n'); await git('add', 'other.txt');
     const requestPath = join(workspace, '.shoaku', 'git-request.json');
@@ -31,6 +33,7 @@ test('commits only requested files on the session branch and acknowledges reques
     const result = await processGitRequest(workspace, 'shoaku/test');
     assert.equal(result.status, 'complete');
     assert.equal(result.hash, await git('rev-parse', 'HEAD'));
+    assert.match(await readFile(join(workspace, '.shoaku', 'COMMITS.md'), 'utf8'), new RegExp(result.hash));
     assert.equal(await git('show', '--format=', '--name-only', 'HEAD'), 'source.txt');
     assert.equal(await processGitRequest(workspace, 'shoaku/test'), null);
     assert.equal(JSON.parse(await readFile(join(workspace, '.shoaku', 'git-response.json'), 'utf8')).hash, result.hash);
@@ -60,6 +63,7 @@ test('folds plan corrections into a session commit while preserving later work a
     await writeFile(join(workspace, 'source.txt'), 'initial implementation\n');
     await git('add', 'source.txt'); await git('commit', '-m', 'Implement behavior');
     const target = await git('rev-parse', 'HEAD');
+    await writeFile(join(workspace, '.shoaku', 'COMMITS.md'), `Old commit: ${target}\n`);
     await git('branch', 'checkpoint', target);
     await git('config', 'rebase.updateRefs', 'true');
     await writeFile(join(workspace, 'later.txt'), 'later work\n');
@@ -85,6 +89,10 @@ test('folds plan corrections into a session commit while preserving later work a
     assert.equal(await processGitRequest(workspace, 'shoaku/test'), null);
     assert.equal(result.hash, await git('rev-parse', 'HEAD'));
     const rewrittenTarget = await git('rev-parse', 'HEAD~1');
+    const guide = await readFile(join(workspace, '.shoaku', 'COMMITS.md'), 'utf8');
+    assert.ok(guide.includes(`commits/${rewrittenTarget}.md`));
+    assert.ok(guide.includes(`commits/${result.hash}.md`));
+    assert.ok(!guide.includes(target));
     await writeFile(join(workspace, 'source.txt'), 'later source change\n');
     await git('add', 'source.txt'); await git('commit', '-m', 'Later source behavior');
     const beforeConflict = await git('rev-parse', 'HEAD');

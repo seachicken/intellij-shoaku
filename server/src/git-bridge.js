@@ -2,6 +2,7 @@ import { readFile, writeFile, lstat } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 import childProcess from 'node:child_process';
 import { promisify } from 'node:util';
+import { refreshCommitGuide } from './commit-review.js';
 const execFile = promisify(childProcess.execFile);
 const git = async (workspace, ...args) => (await execFile('git', ['-C', workspace, ...args], { timeout: 30000 })).stdout.trim();
 
@@ -72,6 +73,9 @@ export async function processGitRequest(workspace, branch) {
         throw new Error(`Autosquash failed; the fixup commit is preserved. Inspect the branch before retrying: ${error.message}`);
       }
     }
+    // Publish the current hashes before acknowledging the commit/fixup. The
+    // Explorer must not need to mark its goal complete to refresh this index.
+    await refreshCommitGuide(workspace);
     response = { id: request.id, status: 'complete', parent, hash: await git(workspace, 'rev-parse', 'HEAD') };
   } catch (error) {
     response = { id: request?.id || null, status: 'failed', error: error.message };

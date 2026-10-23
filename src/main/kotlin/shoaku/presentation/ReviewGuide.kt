@@ -8,7 +8,8 @@ import java.nio.file.Path
 internal data class GuideAnchor(val path: String, val side: String, val startLine: Int, val endLine: Int, val label: String)
 internal data class GuideLink(val to: String, val label: String)
 internal data class GuideStep(val id: String, val title: String, val why: String, val change: String,
-                              val verification: String, val anchors: List<GuideAnchor>, val links: List<GuideLink>) {
+                              val verification: String, val anchors: List<GuideAnchor>, val links: List<GuideLink>,
+                              val intent: String? = null) {
     override fun toString() = title
 }
 internal data class GuideExclusion(val path: String, val reason: String)
@@ -18,7 +19,7 @@ internal data class ReviewGuideResult(val guide: ReviewGuide?, val issue: String
 
 internal fun readReviewGuide(workspace: Path, details: ReviewCommitDetails, reader: GitCommitReviewReader): ReviewGuideResult {
     val path = workspace.resolve(".shoaku/commits/${details.commit.hash}.review.json")
-    if (!Files.exists(path)) return ReviewGuideResult(null, "Design-to-code links have not been generated for this commit. The Markdown explanation is shown instead; links will appear automatically when available.")
+    if (!Files.exists(path)) return ReviewGuideResult(null, "Intent-to-content links have not been generated for this commit. The Markdown explanation is shown instead; links will appear automatically when available.")
     return try {
         require(Files.size(path) <= 512 * 1024) { "Design map is too large." }
         val json = JsonParser.parseString(Files.readString(path)).asJsonObject
@@ -43,7 +44,8 @@ internal fun readReviewGuide(workspace: Path, details: ReviewCommitDetails, read
                 val link = linkElement.asJsonObject
                 GuideLink(link.text("to"), link.text("label"))
             }
-            GuideStep(step.text("id"), step.text("title"), step.text("why"), step.text("change"), step.text("verification"), anchors, links)
+            GuideStep(step.text("id"), step.text("title"), step.text("why"), step.text("change"), step.text("verification"), anchors, links,
+                if (step.has("intent")) step.text("intent") else null)
         }
         require(steps.size in (if (details.files.isEmpty()) 0 else 1)..24 && steps.map { it.id }.distinct().size == steps.size && steps.all { it.id.matches(Regex("[a-zA-Z0-9_-]{1,80}")) }) { "Design steps need unique IDs." }
         val markdownPath = workspace.resolve(".shoaku/commits/${details.commit.hash}.md")
@@ -55,11 +57,11 @@ internal fun readReviewGuide(workspace: Path, details: ReviewCommitDetails, read
         }
         val blobs = mutableMapOf<String, ReviewFileContent>()
         for (step in steps) {
-            require(step.anchors.size in 1..20) { "${step.title} needs a concrete code location." }
+            require(step.anchors.size in 1..20) { "${step.title} needs a concrete text or code location." }
             require(step.links.all { link -> steps.any { it.id == link.to } }) { "Design flow has an unknown target." }
             for (anchor in step.anchors) {
                 val file = details.files.firstOrNull { it.path == anchor.path } ?: error("Unchanged or unknown file: ${anchor.path}")
-                require(anchor.side in listOf("before", "after") && anchor.startLine >= 1 && anchor.endLine >= anchor.startLine) { "Invalid code location." }
+                require(anchor.side in listOf("before", "after") && anchor.startLine >= 1 && anchor.endLine >= anchor.startLine) { "Invalid text or code location." }
                 val content = blobs.getOrPut(anchor.path) { reader.content(details, file) }
                 require(content.unavailableReason == null) { content.unavailableReason.orEmpty() }
                 val text = if (anchor.side == "before") content.before else content.after
@@ -72,6 +74,6 @@ internal fun readReviewGuide(workspace: Path, details: ReviewCommitDetails, read
         require(details.files.all { it.path in covered || excluded.any { excludedFile -> excludedFile.path == it.path } }) { "Some changed files have no design correspondence." }
         ReviewGuideResult(ReviewGuide(json.text("problem"), json.text("before"), json.text("after"), steps, excluded), null)
     } catch (error: Exception) {
-        ReviewGuideResult(null, "Design-to-code links are unavailable: ${error.message}")
+        ReviewGuideResult(null, "Intent-to-content links are unavailable: ${error.message}")
     }
 }

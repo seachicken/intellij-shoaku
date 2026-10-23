@@ -19,10 +19,11 @@ export async function inspectReviewMap(workspace, commit, git) {
   const blobs = new Map();
   for (const step of map.steps) {
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(step.id || '') || ids.has(step.id) || ![step.title, step.why, step.change, step.verification].every(text)) throw new Error('Each design step needs a unique ID, title, rationale, change, and verification');
+    if (step.intent !== undefined && !text(step.intent)) throw new Error('Step intent must be concise nonempty text');
     ids.add(step.id);
-    if (!Array.isArray(step.anchors) || !step.anchors.length || step.anchors.length > 20) throw new Error(`Step ${step.id} has no concrete code locations`);
+    if (!Array.isArray(step.anchors) || !step.anchors.length || step.anchors.length > 20) throw new Error(`Step ${step.id} has no concrete text or code locations`);
     for (const anchor of step.anchors) {
-      if (!changed.includes(anchor.path) || !['before', 'after'].includes(anchor.side) || !Number.isInteger(anchor.startLine) || !Number.isInteger(anchor.endLine) || anchor.startLine < 1 || anchor.endLine < anchor.startLine || !text(anchor.label)) throw new Error(`Step ${step.id} has an invalid code location`);
+      if (!changed.includes(anchor.path) || !['before', 'after'].includes(anchor.side) || !Number.isInteger(anchor.startLine) || !Number.isInteger(anchor.endLine) || anchor.startLine < 1 || anchor.endLine < anchor.startLine || !text(anchor.label)) throw new Error(`Step ${step.id} has an invalid text or code location`);
       const revision = anchor.side === 'before' ? parent : commit.hash;
       if (!revision) throw new Error('The root commit has no before-side code');
       const object = `${revision}:${anchor.path}`;
@@ -33,7 +34,7 @@ export async function inspectReviewMap(workspace, commit, git) {
       }
       const blob = blobs.get(object);
       const lines = blob ? blob.split('\n').length - (blob.endsWith('\n') ? 1 : 0) : 0;
-      if (blob.includes('\0') || anchor.endLine > lines) throw new Error(`Code location ${anchor.path}:${anchor.startLine}-${anchor.endLine} does not exist in this commit`);
+      if (blob.includes('\0') || anchor.endLine > lines) throw new Error(`Text or code location ${anchor.path}:${anchor.startLine}-${anchor.endLine} does not exist in this commit`);
       covered.add(anchor.path);
     }
     if (!Array.isArray(step.links) || step.links.some(link => !text(link.label) || typeof link.to !== 'string')) throw new Error('Design relationships need target IDs and labels');

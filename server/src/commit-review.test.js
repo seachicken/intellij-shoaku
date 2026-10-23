@@ -8,7 +8,7 @@ import childProcess from 'node:child_process';
 import { recordReviewBase, inspectCommitReview, inspectExistingCommitReview } from './commit-review.js';
 
 const execFile = promisify(childProcess.execFile);
-test('reviews actual commits and rejects uncommitted work, missing explanations and stale report links', async () => {
+test('reviews actual commits and rejects uncommitted work, missing explanations and stale commit artifacts', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'shoaku-review-test-'));
   const git = async (...args) => (await execFile('git', ['-C', workspace, '-c', 'commit.gpgsign=false', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args])).stdout.trim();
   try {
@@ -28,7 +28,6 @@ test('reviews actual commits and rejects uncommitted work, missing explanations 
     await mkdir(join(workspace, '.shoaku', 'commits'));
     await writeFile(join(workspace, '.shoaku', 'commits', `${hash}.md`), `# Implementation\n${hash}\n## Change behavior\n`);
     assert.equal((await inspectCommitReview(workspace)).ready, false);
-    await writeFile(join(workspace, '.shoaku', 'RESULTS.md'), `# Outcome\n[Read](commits/${hash}.md)\n`);
     assert.equal((await inspectCommitReview(workspace)).ready, false); // prose alone has no correspondence
     await writeFile(join(workspace, '.shoaku', 'commits', `${hash}.review.json`), JSON.stringify({
       schemaVersion: 1, commit: hash, problem: 'Old behavior', before: 'before', after: 'after',
@@ -36,6 +35,8 @@ test('reviews actual commits and rejects uncommitted work, missing explanations 
         anchors: [{ path: 'source.txt', side: 'after', startLine: 1, endLine: 1, label: 'Behavior' }], links: [] }], excludedFiles: []
     }));
     assert.equal((await inspectCommitReview(workspace)).ready, true);
+    assert.equal(await readFile(join(workspace, '.shoaku', 'RESULTS.md'), 'utf8'), '# Outcome\n');
+    assert.ok((await readFile(join(workspace, '.shoaku', 'COMMITS.md'), 'utf8')).includes(`commits/${hash}.md`));
     assert.equal(await recordReviewBase(workspace, { existing: true }), base);
     await git('commit', '--amend', '-m', 'Organized implementation');
     const rewritten = await inspectCommitReview(workspace);

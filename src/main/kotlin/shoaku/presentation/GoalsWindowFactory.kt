@@ -52,6 +52,9 @@ import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.project.ProjectManager
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.ide.impl.ProjectUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
@@ -114,6 +117,20 @@ private fun Project.sendNotificationToShoakuServer(
     server.sendNotification { notification(it as AppLanguageServer) }
 }
 
+// Keep all interaction with an attached session in the owning project window.
+private fun focusSessionOwner(project: Project?, shoakuId: String): Boolean {
+    val owner = ProjectManager.getInstance().openProjects.firstOrNull { candidate ->
+        candidate != project && !candidate.isDisposed &&
+            candidate.service<ShoakuSettings>().viewModel.items.any {
+                it.shoakuId == shoakuId && it.sessionId != null
+            }
+    } ?: return false
+    owner.service<ShoakuSettings>().viewModel.requestedSessionId = shoakuId
+    owner.basePath?.let { ProjectUtil.findAndFocusExistingProjectForPath(Path.of(it)) }
+    ToolWindowManager.getInstance(owner).getToolWindow("Shoaku")?.activate(null)
+    return true
+}
+
 private val ChatSendIconKey = PathIconKey("/icons/send/send.svg", GoalsWindowFactory::class.java)
 private val EmptyGoalsSample = """
 - [ ] Fix errors with large item counts [shoaku]
@@ -154,6 +171,18 @@ private fun MyToolWindowContent(
         state.selectedSessionId = key?.shoakuId
     }
 
+    LaunchedEffect(vm.requestedSessionId, vm.hasReceivedGoals) {
+        val id = vm.requestedSessionId ?: return@LaunchedEffect
+        if (!vm.hasReceivedGoals) return@LaunchedEffect
+        val key = SessionKey(id)
+        if (key !in openSessionKeys) {
+            openSessionKeys.add(key)
+            persistOpenSessions()
+        }
+        selectSession(key)
+        vm.requestedSessionId = null
+    }
+
     LaunchedEffect(initialOpenSessionKeys, vm.hasReceivedGoals) {
         // The language server is guaranteed to be available only after its first sync.
         // Sending this during initial composition can happen before the server starts.
@@ -162,6 +191,10 @@ private fun MyToolWindowContent(
         }
         val currentProject = project ?: return@LaunchedEffect
         initialOpenSessionKeys.forEach { key ->
+            if (ProjectManager.getInstance().openProjects.any { other ->
+                other != currentProject && !other.isDisposed &&
+                    other.service<ShoakuSettings>().viewModel.items.any { it.shoakuId == key.shoakuId && it.sessionId != null }
+            }) return@forEach
             currentProject.sendNotificationToShoakuServer { server ->
                 server.startSession(StartSessionParams(key.shoakuId))
             }
@@ -204,7 +237,9 @@ private fun MyToolWindowContent(
             openSessions = openSessions,
             selectedSessionKey = selectedSessionKey,
             onSelectSessions = { selectSession(null) },
-            onSelectSession = ::selectSession,
+            onSelectSession = { key ->
+                if (!focusSessionOwner(project, key.shoakuId)) selectSession(key)
+            },
             onCloseSession = { key ->
                 openSessionKeys.remove(key)
                 persistOpenSessions()
@@ -226,6 +261,9 @@ private fun MyToolWindowContent(
                     state.goalFilter = it
                 },
                 onOpenSession = { session ->
+                    if (session.shoakuId != null && focusSessionOwner(project, session.shoakuId)) {
+                        return@SessionListContent
+                    }
                     if (session.shoakuId == null) {
                         selectedSessionKey = null
                         state.selectedSessionId = null
@@ -530,7 +568,7 @@ internal fun planOverview(markdown: String): String {
         .dropWhile { it.isBlank() }
     return lines.takeWhile { line ->
         val text = line.trimStart()
-        !text.startsWith("#") && !text.startsWith("```") && !text.startsWith("~~~") &&
+        text.isNotBlank() && !text.startsWith("#") && !text.startsWith("```") && !text.startsWith("~~~") &&
             !Regex("""^(?:[-*+]|\d+[.)])\s+.*$""").matches(text)
     }.joinToString(" ") { it.trim() }.trim()
 }
@@ -581,7 +619,7 @@ private fun ImplementationDocumentsPane(session: Item, project: Project?, modifi
                 }.getOrDefault(emptyList())
                 // Navigator owns task wording/order. Explorer only contributes
                 // progress for matching tasks; its extra rows must not replace the plan.
-                val progress = readTasks(root.resolve("goals.md")).groupBy { it.title.trim() }
+                val progress = readTasks(root.resolve("GOALS.md")).groupBy { it.title.trim() }
                 val occurrences = mutableMapOf<String, Int>()
                 val tasks = readTasks(root.resolve("PLANS.md")).map { task ->
                     val title = task.title.trim()

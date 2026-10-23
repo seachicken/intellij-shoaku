@@ -29,6 +29,7 @@ export async function recordReviewBase(workspace, { existing = false } = {}) {
   if (!/^[a-f0-9]{40,64}$/.test(revision || '')) throw new Error('Cannot establish session starting revision');
   await mkdir(join(workspace, '.shoaku'), { recursive: true });
   await writeFile(file, revision + '\n', { flag: 'wx' });
+  await refreshCommitGuide(workspace);
   return revision;
 }
 
@@ -37,7 +38,7 @@ export async function inspectExistingCommitReview(workspace) {
   return inspectCommitReview(workspace);
 }
 
-export async function inspectCommitReview(workspace) {
+async function sessionCommits(workspace) {
   const base = (await readFile(join(workspace, '.shoaku', 'base-revision'), 'utf8')).trim();
   if (!/^[a-f0-9]{40,64}$/.test(base)) throw new Error('Invalid session starting revision');
   await git(workspace, 'merge-base', '--is-ancestor', base, 'HEAD');
@@ -46,6 +47,34 @@ export async function inspectCommitReview(workspace) {
     const [hash, ...subject] = line.split('\t');
     return { hash, subject: subject.join('\t') };
   });
+  return { base, commits };
+}
+
+// Serialize index refreshes and read Git inside that queue so an older review
+// inspection cannot overwrite an index published after a fixup.
+const guideRefreshes = new Map();
+export async function refreshCommitGuide(workspace) {
+  const refresh = (guideRefreshes.get(workspace) || Promise.resolve()).catch(() => {}).then(async () => {
+    const { base, commits } = await sessionCommits(workspace);
+    const guide = [
+      '# Implementation commits', '',
+      `Starting revision: \`${base}\``, '',
+      'Current session commit order. Explanations may still be in progress; completion is checked separately.', '',
+      '| Commit | Purpose | Explanation |', '| --- | --- | --- |',
+      ...commits.map(commit => `| \`${commit.hash.slice(0, 12)}\` | ${commit.subject.replaceAll('|', '\\|')} | [Read](commits/${commit.hash}.md) |`), '',
+      '[Design](RESULTS.md)', ''
+    ].join('\n');
+    const path = join(workspace, '.shoaku', 'COMMITS.md');
+    const previous = await readFile(path, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+    if (previous !== guide) await writeFile(path, guide);
+  });
+  guideRefreshes.set(workspace, refresh);
+  try { await refresh; }
+  finally { if (guideRefreshes.get(workspace) === refresh) guideRefreshes.delete(workspace); }
+}
+
+export async function inspectCommitReview(workspace) {
+  const { commits } = await sessionCommits(workspace);
   const changed = (await git(workspace, 'diff', '--name-only', '-z', 'HEAD')).split('\0').filter(Boolean);
   const added = (await git(workspace, 'ls-files', '--others', '--exclude-standard', '-z')).split('\0').filter(Boolean);
   const uncommitted = [...new Set([...changed, ...added])].filter(path => !path.startsWith('.shoaku/'));
@@ -63,23 +92,12 @@ export async function inspectCommitReview(workspace) {
     if (error.code !== 'ENOENT') throw error;
     return '';
   });
-  const missingLinks = commits.filter(commit => !results.includes(`commits/${commit.hash}.md`)).map(commit => commit.hash);
-  const ready = uncommitted.length === 0 && missingDocs.length === 0 && missingLinks.length === 0 && invalidMaps.length === 0 && results.trim().length > 0;
+  const ready = uncommitted.length === 0 && missingDocs.length === 0 && invalidMaps.length === 0 && results.trim().length > 0;
   const detail = uncommitted.length ? `${uncommitted.length} implementation files remain uncommitted.`
     : !results.trim() ? 'The design report is missing.'
     : missingDocs.length ? `${missingDocs.length} commit explanations are missing or do not identify the actual commit.`
-    : missingLinks.length ? 'The design report does not link to every implementation commit.'
     : invalidMaps.length ? `${invalidMaps.length} commits need valid design-to-code links: ${invalidMaps[0].error}`
     : commits.length ? `${commits.length} implementation commits are ready for review.` : 'No implementation changes; the design report is available.';
-  const guide = [
-    '# Implementation commits', '',
-    `Starting revision: \`${base}\``, '', detail, '',
-    '| Commit | Purpose | Explanation |', '| --- | --- | --- |',
-    ...commits.map(commit => `| \`${commit.hash.slice(0, 12)}\` | ${commit.subject.replaceAll('|', '\\|')} | ${missingDocs.includes(commit.hash) ? 'Pending' : `[Read](commits/${commit.hash}.md)`} |`), '',
-    '[Design](RESULTS.md)', ''
-  ].join('\n');
-  const guidePath = join(workspace, '.shoaku', 'COMMITS.md');
-  const previous = await readFile(guidePath, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
-  if (previous !== guide) await writeFile(guidePath, guide);
-  return { ready, detail, commits, uncommitted, missingDocs, missingLinks, invalidMaps };
+  await refreshCommitGuide(workspace);
+  return { ready, detail, commits, uncommitted, missingDocs, invalidMaps };
 }

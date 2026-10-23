@@ -28,6 +28,7 @@ class ShoakuSettings : PersistentStateComponent<ShoakuSettings.State> {
 }
 
 class ShoakuViewModel {
+    var requestedSessionId by mutableStateOf<String?>(null)
     var items by mutableStateOf<List<Item>>(emptyList())
     var hasReceivedGoals by mutableStateOf(false)
     var goalFilter by mutableStateOf(GoalFilter.All)
