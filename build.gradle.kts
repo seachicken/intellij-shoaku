@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "shoaku"
-version = "0.7.5"
+version = "0.7.6"
 
 // Set the JVM language level used to build the project.
 kotlin {
@@ -56,11 +56,11 @@ intellijPlatform {
         changeNotes = """
             <h2>Improvements</h2>
             <ul>
-                <li>Simplify Navigator session titles and leave Explorer session titles unchanged</li>
+                <li>Make implementation reviews easier to follow with inline intent explanations and clearer outcome summaries</li>
             </ul>
             <h2>Bug Fixes</h2>
             <ul>
-                <li>Correctly display agent errors in activity and summary status indicators</li>
+                <li>Stabilize session ownership, Explorer startup and progress tracking, and review commit updates</li>
             </ul>
         """.trimIndent()
     }
